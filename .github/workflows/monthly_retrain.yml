@@ -1,0 +1,41 @@
+name: 🤖 月次再学習
+
+on:
+  schedule:
+    # 毎月1日 8:00 JST = 23:00 UTC (前日)
+    - cron: "0 23 L * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-ci.txt
+
+      - name: Retrain model
+        run: |
+          cd $GITHUB_WORKSPACE
+          PYTHONPATH=src python -m keirin retrain
+
+      - name: Commit new model
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add models/
+          git diff --cached --quiet || git commit -m "feat: モデル再学習 $(date +%Y-%m)"
+          git push

@@ -1,0 +1,32 @@
+# Core
+pandas>=2.2
+numpy>=1.26
+scipy>=1.12
+pyyaml>=6.0
+pydantic>=2.6
+python-dotenv>=1.0
+click>=8.1
+
+# Scraping
+requests>=2.32
+beautifulsoup4>=4.12
+lxml>=5.1
+html5lib>=1.1
+tenacity>=8.2
+
+# DB
+sqlalchemy>=2.0
+
+# ML
+lightgbm>=4.3
+scikit-learn>=1.4
+joblib>=1.4
+
+# Reporting
+jinja2>=3.1
+tabulate>=0.9
+
+# Dev
+pytest>=8.0
+pytest-mock
+ruff

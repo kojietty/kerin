@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>決戦速報 — {{ date_label }}</title>
+  <style>{{ inline_css|safe }}</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div>
+      <div class="brand">決戦速報<span class="accent">.</span></div>
+      <div class="brand-tagline">KEIRIN&nbsp;DAILY&nbsp;BULLETIN&nbsp;/&nbsp;EV&nbsp;FILTERED&nbsp;TRIFECTA</div>
+    </div>
+    <div class="dateline">
+      <strong>{{ date_label }}</strong>
+      generated {{ generated_at }}
+    </div>
+  </header>
+
+  {% if emergency_stop %}
+  <div class="emergency">
+    緊急停止中。月初累積 ¥{{ "{:+,d}".format(mtd_pnl) }} が下限 ¥{{ "{:+,d}".format(emergency_threshold) }} を割り込みました。今月の本番購入は停止し、ペーパー記録のみ続行します。
+  </div>
+  {% endif %}
+
+  <section class="pnl-bar" aria-label="収支">
+    <div class="cell cumulative">
+      <label>月初比 累積 P&L</label>
+      <div class="v {{ 'pos' if mtd_pnl >= 0 else 'neg' }}"
+           data-prefix="{{ '+' if mtd_pnl >= 0 else '' }}">¥{{ "{:,d}".format(mtd_pnl) }}</div>
+    </div>
+    <div class="cell">
+      <label>月次 回収率</label>
+      <div class="mono {{ 'pos' if (mtd_roi or 0) >= 1.0 else 'neg' }}">
+        {{ "{:.0%}".format(mtd_roi) if mtd_roi is not none else "—" }}
+      </div>
+    </div>
+    <div class="cell">
+      <label>月次 的中率</label>
+      <div class="mono">{{ "{:.0%}".format(mtd_hit_rate) if mtd_hit_rate is not none else "—" }}</div>
+    </div>
+    <div class="cell">
+      <label>本日 投資</label>
+      <div class="mono">¥{{ "{:,d}".format(daily_invest) }}</div>
+    </div>
+    <div class="cell">
+      <label>残り予算</label>
+      <div class="mono">¥{{ "{:,d}".format(daily_remaining) }}</div>
+    </div>
+  </section>
+
+  <div class="summary">
+    <span>本日開催 <b>{{ total_races }}</b> R</span>
+    <span>推奨 <b>{{ recommended_count }}</b> R</span>
+    <span>総点数 <b>{{ total_picks }}</b></span>
+    <span>本日投資 <b>¥{{ "{:,d}".format(daily_invest) }}</b> / 上限 ¥{{ "{:,d}".format(daily_cap) }}</span>
+  </div>
+
+  <section class="races">
+    {% for r in recommended %}
+    <article class="race" style="animation-delay: {{ loop.index0 * 60 }}ms">
+      <div class="race-head">
+        <div class="race-title">
+          <span class="venue">{{ r.venue_name }}</span>
+          <span class="rno">{{ r.race_no }}R</span>
+        </div>
+        <div class="race-meta">
+          {% if r.grade %}<span>{{ r.grade }}</span>{% endif %}
+          {% if r.race_class %}<span>{{ r.race_class }}</span>{% endif %}
+          {% if r.post_time %}<span>{{ r.post_time }} 発走</span>{% endif %}
+          {% if r.distance_m %}<span>{{ r.distance_m }}m</span>{% endif %}
+          {% if r.weather %}<span>{{ r.weather }}</span>{% endif %}
+        </div>
+
+        {% if r.lines %}
+        <div class="line-block">
+          <span class="label">並び</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+            {% for line in r.lines %}
+            <div class="line-group">
+              {% for car in line %}
+                <span class="bib bib-{{ car }}">{{ car }}</span>
+              {% endfor %}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        {% if r.axis %}
+        <div class="axis">
+          <span class="label">軸</span>
+          <span class="bib bib-{{ r.axis.car_no }} lg" style="vertical-align: middle;">{{ r.axis.car_no }}</span>
+          {{ r.axis.name }}
+          {% if r.axis.note %}<span style="color: var(--paper-faint); margin-left: 8px;">{{ r.axis.note }}</span>{% endif %}
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="picks">
+        <div class="picks-head">
+          <div>買い目</div>
+          <div>オッズ</div>
+          <div>推定確率</div>
+          <div>EV</div>
+          <div style="text-align: right;">金額</div>
+        </div>
+        {% for p in r.picks %}
+        <div class="picks-row">
+          <div class="combo">
+            {% for car in p.cars %}
+              <span class="bib bib-{{ car }}">{{ car }}</span>
+              {% if not loop.last %}<span class="sep">→</span>{% endif %}
+            {% endfor %}
+          </div>
+          <div class="odds num" data-countup="{{ p.odds }}">{{ "{:.1f}".format(p.odds) }}</div>
+          <div class="prob num">{{ "{:.1%}".format(p.prob) }}</div>
+          <div><span class="ev-badge ev-{{ p.ev_class }}">{{ "{:.2f}".format(p.ev) }}</span></div>
+          <div class="stake" style="text-align: right;">
+            {% if p.stake_yen > 0 %}
+              ¥{{ "{:,d}".format(p.stake_yen) }}
+            {% else %}
+              <span style="color: var(--paper-faint);">paper</span>
+            {% endif %}
+            {% if p.hit is defined and p.hit is not none %}
+              <div>{% if p.hit %}<span class="hit">的中</span>{% else %}<span class="miss">外</span>{% endif %}</div>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+        <div class="picks-foot">
+          <span>{{ r.picks|length }}点 / 最大 {{ r.max_ev|round(2) }}EV</span>
+          <strong>¥{{ "{:,d}".format(r.total_stake) }}</strong>
+        </div>
+      </div>
+    </article>
+    {% else %}
+    <article class="race">
+      <div class="race-head">
+        <div class="race-title"><span class="venue">本日は推奨レースなし</span></div>
+        <div class="race-meta"><span>EV閾値 {{ ev_threshold }} を超える買い目が見つかりませんでした</span></div>
+      </div>
+      <div class="picks">
+        <div class="picks-foot"><span>—</span><strong>¥0</strong></div>
+      </div>
+    </article>
+    {% endfor %}
+  </section>
+
+  {% if skipped %}
+  <section class="skips">
+    <h2>見送りレース <span style="font-family: var(--mono); font-size: 0.6em; color: var(--paper-faint); letter-spacing: 0.18em;">{{ skipped|length }}本</span></h2>
+    <div class="skips-grid">
+      {% for s in skipped %}
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">{{ s.venue_name }} {{ s.race_no }}R</span>
+        <span class="max-ev">max EV {{ "{:.2f}".format(s.max_ev) if s.max_ev else "—" }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+
+  <footer>
+    <div>KEIRIN-PREDICTION-LOCAL · ROI-FOCUSED · TRIFECTA-ONLY</div>
+    <div>This is not a sales tool · Manual purchase required · 賭けすぎ注意</div>
+  </footer>
+
+</div>
+
+<script>
+  // Count-up animation for odds numbers
+  (function () {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const els = document.querySelectorAll("[data-countup]");
+    els.forEach(el => {
+      const target = parseFloat(el.getAttribute("data-countup"));
+      if (!isFinite(target)) return;
+      const dur = 700;
+      const start = performance.now();
+      function tick(now) {
+        const t = Math.min(1, (now - start) / dur);
+        const eased = 1 - Math.pow(1 - t, 3);
+        const cur = (target * eased).toFixed(1);
+        el.textContent = cur;
+        if (t < 1) requestAnimationFrame(tick);
+        else el.textContent = target.toFixed(1);
+      }
+      requestAnimationFrame(tick);
+    });
+  })();
+</script>
+
+</body>
+</html>

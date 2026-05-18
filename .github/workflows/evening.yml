@@ -1,0 +1,43 @@
+name: 🏆 競輪結果収集 (夜)
+
+on:
+  schedule:
+    # 毎日 21:00 JST = 12:00 UTC
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  collect-results:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-ci.txt
+
+      - name: Fetch today's results
+        env:
+          REQUEST_SLEEP: "1.5"
+        run: python scripts/ci_evening.py
+
+      - name: Commit updated DB
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/keirin.db
+          git diff --cached --quiet || git commit -m "chore: 結果収集 $(date +%Y-%m-%d)"
+          git push

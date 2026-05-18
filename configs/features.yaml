@@ -1,0 +1,23 @@
+player_form:
+  recent_n_races: 5
+  long_recent_n_races: 10
+  rest_days_capped_at: 60
+
+line:
+  position_one_hot: true
+  is_self_starter: true
+
+venue:
+  bank_length_one_hot: true
+  bank_player_lookback_days: 730
+
+gear:
+  include_race_relative: true
+
+kimarite:
+  lookback_n_races: 30
+  categories: ["逃", "捲", "差", "マーク"]
+
+target:
+  label: top3                  # 3着内に入るか
+  rank_threshold: 3

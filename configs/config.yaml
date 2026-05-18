@@ -1,0 +1,28 @@
+paths:
+  db: data/keirin.db
+  raw_html: data/raw
+  reports: reports
+  models: models
+  logs: logs
+
+scraper:
+  base_url: https://keirin.jp
+  user_agent: "KeirinResearchBot/0.1 (personal research; contact: pagudaruma@gmail.com)"
+  request_interval_sec: 2.0
+  jitter_sec: 0.5
+  daily_request_cap: 5000
+  retry_max_attempts: 3
+  retry_backoff_base_sec: 2.0
+  timeout_sec: 20
+  respect_robots: true
+  cache_raw_html: true
+
+logging:
+  level: INFO
+  rotation_mb: 10
+  retention_days: 30
+
+reporting:
+  output_html: true
+  output_markdown: true
+  timezone: Asia/Tokyo

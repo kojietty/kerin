@@ -1,0 +1,59 @@
+name: 🏁 競輪予想 (朝)
+
+on:
+  schedule:
+    # 毎日 9:00 JST = 0:00 UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch:  # 手動実行ボタン
+
+permissions:
+  contents: write      # DB + docs/ を commit & push
+  pages: write         # GitHub Pages デプロイ
+  id-token: write
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-ci.txt
+
+      - name: Run morning prediction
+        env:
+          NETKEIRIN_COOKIE: ${{ secrets.NETKEIRIN_COOKIE }}
+          REQUEST_SLEEP: "1.5"
+        run: python scripts/ci_morning.py
+
+      - name: Commit updated DB + docs
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/keirin.db models/ docs/ reports/
+          git diff --cached --quiet || git commit -m "chore: 予想更新 $(date +%Y-%m-%d)"
+          git push
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: prediction-pages
+        continue-on-error: true  # Pages 未設定でも落ちない
+
+      # Pages が未設定の場合は docs/ を直接 push で配信
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/
+        continue-on-error: true

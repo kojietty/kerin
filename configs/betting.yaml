@@ -1,0 +1,19 @@
+# Trifecta betting selection parameters.
+# All thresholds are deliberately conservative; tighten further once backtest is validated.
+
+ev_threshold: 1.10            # Only combos with EV >= this are considered
+odds_min: 10.0                # Lower bound (exclude heavy favorites where edge is rare)
+odds_max: 100.0               # Upper bound (exclude extreme longshots — high estimation noise)
+prob_min: 0.005               # Floor on estimated probability (avoid extreme variance picks)
+max_picks_per_race: 10        # Cap as specified by user
+min_picks_per_race: 0         # Zero picks is a valid output (= skip race)
+
+# Hardcoded ceilings — DO NOT override via CLI. See stake.py.
+daily_budget_yen: 1000
+per_bet_min_yen: 100
+kelly_fraction: 0.25
+skip_if_no_pick: true
+emergency_stop_drawdown_yen: -3000
+
+# Combo probability expansion: 'plackett_luce' (recommended) or 'product'
+combo_method: plackett_luce

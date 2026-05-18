@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keirin"
+version = "0.1.0"
+description = "Daily keirin (Japanese bicycle racing) prediction system with EV-positive trifecta selection"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "pagudaruma", email = "pagudaruma@gmail.com" }]
+license = { text = "MIT" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+keirin = [
+  "db/schema.sql",
+  "reporting/templates/*.j2",
+  "reporting/templates/partials/*.j2",
+  "reporting/assets/*",
+]
+
+[project.scripts]
+keirin = "keirin.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
