@@ -10,7 +10,7 @@ import click
 
 from keirin.config import HARD_DAILY_BUDGET_YEN, load_app_config, load_betting_config
 from keirin.db.engine import get_engine, init_db
-from keirin.db.repository import month_pnl, settle_bets_for_race
+from keirin.db.repository import accuracy_metrics, log_prediction, month_pnl, settle_bets_for_race, settle_prediction_log
 from keirin.logging_setup import setup_logging
 from keirin.reporting.html_renderer import example_payload, write_dashboard
 from keirin.reporting.markdown import write_markdown
@@ -299,10 +299,12 @@ def record_result_cmd(date_s: str) -> None:
     kj = KeirinJp()
     race_ids = _race_ids_for(kj, day)
     settled = 0
+    settled_preds = 0
     for rid in race_ids:
         kj.fetch_result(rid)
         settled += settle_bets_for_race(kj.engine, rid)
-    click.echo(f"settled {settled} bets across {len(race_ids)} races")
+        settled_preds += settle_prediction_log(kj.engine, rid)
+    click.echo(f"settled {settled} bets, {settled_preds} predictions across {len(race_ids)} races")
 
 
 # ---------------------------------------------------------------------------
@@ -347,6 +349,276 @@ def sample_dashboard_cmd(out_path: str | None) -> None:
     click.echo(f"wrote {out}")
     click.echo(f"wrote {md_out}")
     click.echo(f"Open in browser: {out.absolute().as_uri()}")
+
+
+# ---------------------------------------------------------------------------
+# analyze — interactive single-race deep analysis
+# ---------------------------------------------------------------------------
+
+@main.command("analyze")
+@click.argument("race_id", required=False)
+@click.option("--date", "date_s", default="today", help="today/yesterday/YYYY-MM-DD")
+@click.option("--venue", "venue_s", default=None, help="会場コード 2桁 e.g. 11")
+@click.option("--race-no", "race_no", default=None, type=int, help="レース番号 e.g. 11")
+@click.option("--with-odds/--no-odds", default=True, help="オッズを取得してEV計算")
+@click.option("--similar-n", default=5, type=int, help="類似レース表示件数")
+@click.option("--out", "out_path", default=None, help="HTML出力パス")
+def analyze_cmd(
+    race_id: str | None,
+    date_s: str,
+    venue_s: str | None,
+    race_no: int | None,
+    with_odds: bool,
+    similar_n: int,
+    out_path: str | None,
+) -> None:
+    """単レース詳細分析: 出走データ・ライン並び・類似レース・着順予想。"""
+    from keirin.models.predict import analyze_race
+    from keirin.models.train import load_latest_model
+    from keirin.features.builder import build_race_features
+    from keirin.reporting.analyze import render_analysis_terminal
+    from sqlalchemy import text
+
+    cfg = load_app_config()
+    engine = get_engine(cfg.paths.db)
+    init_db(engine)
+    day = _parse_day(date_s)
+
+    # --- Resolve race_id ---
+    if race_id is None:
+        if venue_s is not None and race_no is not None:
+            race_id = f"{day.strftime('%Y%m%d')}{venue_s.zfill(2)}{str(race_no).zfill(2)}"
+        else:
+            race_ids = _race_ids_for_day(engine, day)
+            if not race_ids:
+                click.echo(f"レースが見つかりません: {day}  →  fetch コマンドを先に実行してください")
+                return
+            click.echo(f"\n{day} のレース一覧:")
+            for i, rid in enumerate(race_ids, 1):
+                click.echo(f"  {i:>2}. {rid}")
+            idx = click.prompt("番号を選択", type=int, default=1) - 1
+            if idx < 0 or idx >= len(race_ids):
+                click.echo("無効な番号です")
+                return
+            race_id = race_ids[idx]
+
+    date_iso = f"{race_id[0:4]}-{race_id[4:6]}-{race_id[6:8]}"
+    click.echo(f"\n対象レース: {race_id}  ({date_iso})")
+
+    # --- Optionally fetch odds ---
+    latest_odds: dict[str, float] | None = None
+    if with_odds:
+        try:
+            from keirin.scraper.keirin_jp import KeirinJp
+            kj = KeirinJp()
+            n_odds = kj.fetch_odds(race_id)
+            if n_odds > 0:
+                with engine.begin() as conn:
+                    rows = conn.execute(text(
+                        """
+                        SELECT combo, odds FROM odds_trifecta
+                        WHERE race_id = :rid
+                          AND snapshot_at = (
+                            SELECT MAX(snapshot_at) FROM odds_trifecta
+                            WHERE race_id = :rid2
+                          )
+                        """
+                    ), {"rid": race_id, "rid2": race_id}).fetchall()
+                latest_odds = {r[0]: r[1] for r in rows}
+                click.echo(f"オッズ取得: {len(latest_odds)} コンボ")
+            else:
+                click.echo("オッズ取得できませんでした (--no-odds モードで継続)")
+        except Exception as exc:
+            click.echo(f"オッズ取得エラー: {exc} — 予想のみ実行")
+
+    # --- Load model ---
+    has_model = any(cfg.paths.models.glob("lgbm_top3_*.pkl"))
+    if not has_model:
+        click.echo("モデルが見つかりません。先に: python -m keirin retrain")
+        return
+
+    bundle = load_latest_model(cfg.paths.models)
+    if bundle is None:
+        click.echo("モデル読み込み失敗。retrain を実行してください。")
+        return
+    model, feature_cols, calibrator = bundle
+
+    # --- Build features ---
+    click.echo("特徴量を構築中...")
+    df = build_race_features(engine, race_id, ref_date=date_iso, latest_odds=latest_odds)
+    if df.empty:
+        click.echo(f"出走データが見つかりません: {race_id}  → fetch --kind cards を実行してください")
+        return
+
+    # --- Model version ---
+    model_files = sorted(cfg.paths.models.glob("lgbm_top3_*.pkl"))
+    model_version = model_files[-1].stem if model_files else "unknown"
+
+    # --- Analyze ---
+    click.echo("分析中...")
+    result = analyze_race(
+        engine, race_id, df, model, feature_cols, calibrator,
+        similar_n=similar_n,
+        latest_odds=latest_odds,
+        model_version=model_version,
+    )
+
+    # --- Print terminal report ---
+    click.echo(render_analysis_terminal(result))
+
+    # --- Log prediction for feedback loop ---
+    ranking = result.get("ranking", [])
+    if len(ranking) >= 3:
+        try:
+            log_prediction(
+                engine,
+                race_id=race_id,
+                pred_rank1_car=ranking[0]["car_no"],
+                pred_rank2_car=ranking[1]["car_no"],
+                pred_rank3_car=ranking[2]["car_no"],
+                pred_rank1_prob=ranking[0]["pred_prob_1st"],
+                pred_rank2_prob=ranking[1]["pred_prob_2nd"],
+                pred_rank3_prob=ranking[2]["pred_prob_3rd"],
+                model_version=model_version,
+            )
+            click.echo("予測をログに記録しました (record-result で精度追跡)")
+        except Exception as exc:
+            log.debug("prediction log failed: %s", exc)
+
+    # --- HTML output ---
+    if out_path:
+        _write_analyze_html(result, Path(out_path))
+        click.echo(f"→ {out_path}")
+
+
+def _write_analyze_html(analysis: dict, out_path: Path) -> None:
+    """Write a minimal standalone HTML report for the analysis."""
+    from keirin.reporting.html_renderer import _ASSETS_DIR
+
+    ranking_rows = ""
+    for rank, r in enumerate(analysis.get("ranking", []), 1):
+        p1 = r.get("pred_prob_1st", 0)
+        color = "#4caf50" if rank <= 3 else "#888"
+        ranking_rows += (
+            f"<tr style='color:{color}'>"
+            f"<td>{rank}</td><td>{r['car_no']}</td><td>{r.get('name','?')}</td>"
+            f"<td>{p1:.1%}</td><td>{r.get('pred_prob_2nd',0):.1%}</td>"
+            f"<td>{r.get('pred_prob_3rd',0):.1%}</td></tr>\n"
+        )
+
+    similar_rows = ""
+    for sr in analysis.get("similar_races", []):
+        result_str = "→".join(str(c) for c in sr.get("result", []))
+        similar_rows += (
+            f"<tr><td>{sr['date']}</td><td>{sr['venue_name']}{sr['race_no']}R</td>"
+            f"<td>{sr.get('grade','')}</td><td>{sr['similarity_score']:.2f}</td>"
+            f"<td>{result_str}</td><td>{sr.get('winner_style','') or ''}</td></tr>\n"
+        )
+
+    css = ""
+    try:
+        css = _ASSETS_DIR.joinpath("style.css").read_text(encoding="utf-8")
+    except Exception:
+        pass
+
+    html = f"""<!DOCTYPE html>
+<html lang="ja"><head><meta charset="utf-8">
+<title>{analysis.get('date','')} {analysis.get('venue_name','')} {analysis.get('race_no','')}R 分析</title>
+<style>{css}
+body{{font-family:monospace;background:#0a0a0a;color:#e0e0e0;padding:1rem}}
+table{{border-collapse:collapse;width:100%;margin-bottom:1.5rem}}
+th,td{{border:1px solid #333;padding:.4rem .7rem;text-align:left}}
+th{{background:#1a1a1a;color:#ffd700}}
+h2{{color:#ffd700;margin-top:2rem}}
+</style></head><body>
+<h1>{analysis.get('date','')} {analysis.get('venue_name','')} {analysis.get('race_no','')}R
+  <span style="color:#888;font-size:.8em">{analysis.get('grade','')}</span></h1>
+
+<h2>出走選手</h2>
+<table><tr><th>車</th><th>選手名</th><th>階級</th><th>得点</th><th>休養</th>
+<th>3着内率(5走)</th><th>スタイル</th></tr>
+{''.join(f"""<tr><td>{p['car_no']}</td><td>{p.get('name','?')}</td>
+<td>{p.get('rank_class','')}</td><td>{(p.get('rating') or 0):.1f}</td>
+<td>{int(p['rest_days']) if p.get('rest_days') is not None else '?'}日</td>
+<td>{f"{p['top3_rate_5']:.0%}" if p.get('top3_rate_5') is not None else '?'}</td>
+<td>{p.get('style','')}</td></tr>""" for p in analysis.get('participants', []))}
+</table>
+
+<h2>着順予想</h2>
+<table><tr><th>予測順位</th><th>車</th><th>選手名</th>
+<th>P(1着)</th><th>P(2着)</th><th>P(3着)</th></tr>
+{ranking_rows}</table>
+
+<h2>過去の似たようなレース</h2>
+<table><tr><th>日付</th><th>会場</th><th>グレード</th><th>類似度</th><th>結果</th><th>決まり手</th></tr>
+{similar_rows if similar_rows else '<tr><td colspan="6">類似レースなし</td></tr>'}
+</table>
+</body></html>"""
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# metrics — prediction accuracy tracking
+# ---------------------------------------------------------------------------
+
+@main.command("metrics")
+@click.option("--from", "from_s", default=None, help="YYYY-MM-DD (省略時: 30日前)")
+@click.option("--to", "to_s", default=None, help="YYYY-MM-DD (省略時: 今日)")
+@click.option("--model", "model_v", default=None, help="モデルバージョンでフィルタ")
+def metrics_cmd(from_s: str | None, to_s: str | None, model_v: str | None) -> None:
+    """予測精度レポート: 1位的中率・3着内的中率・三連単完全一致率の推移。"""
+    from datetime import date as _dt, timedelta
+
+    cfg = load_app_config()
+    engine = get_engine(cfg.paths.db)
+    init_db(engine)
+
+    from_date = from_s or (_dt.today() - timedelta(days=30)).isoformat()
+    to_date = to_s or _dt.today().isoformat()
+
+    m = accuracy_metrics(engine, from_date=from_date, to_date=to_date, model_version=model_v)
+
+    click.echo(f"\n== 予測精度レポート ==")
+    click.echo(f"期間: {from_date} 〜 {to_date}" + (f"  モデル: {model_v}" if model_v else ""))
+    click.echo(f"─" * 50)
+    click.echo(f"総予測数   : {m['total_predictions']}")
+    click.echo(f"決着済み   : {m['settled']}")
+
+    def _fmt(v: float | None) -> str:
+        return f"{v:.1%}" if v is not None else "—"
+
+    r1 = m["rank1_hit_rate"]
+    t3 = m["top3_hit_rate"]
+    ex = m["trifecta_exact_hit_rate"]
+
+    r1_color = "green" if (r1 or 0) >= 0.40 else ("yellow" if (r1 or 0) >= 0.30 else "red")
+    t3_color = "green" if (t3 or 0) >= 0.60 else ("yellow" if (t3 or 0) >= 0.45 else "red")
+
+    click.echo(f"1位的中率  : {click.style(_fmt(r1), fg=r1_color)}  (目標: 35-45%)")
+    click.echo(f"3着内的中率: {click.style(_fmt(t3), fg=t3_color)}  (目標: 55-65%)")
+    click.echo(f"三連単一致 : {_fmt(ex)}  (目標: 10-20%)")
+
+    if m["monthly"]:
+        click.echo(f"\n月別推移:")
+        for row in m["monthly"]:
+            r1r = row.get("rank1_rate")
+            t3r = row.get("top3_rate")
+            bar_len = max(0, int((r1r or 0) * 20))
+            bar = "█" * bar_len + "░" * (20 - bar_len)
+            click.echo(
+                f"  {row['month']}  n={row['count']:>3}"
+                f"  1位:{_fmt(r1r):>6}  3着内:{_fmt(t3r):>6}  [{bar}]"
+            )
+
+    click.echo(
+        click.style(
+            "\n注: 三連単80-90%的中は控除率上不可能。"
+            " 3着内65%・1位40%超が現実的な高精度目標です。",
+            fg="bright_black",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
