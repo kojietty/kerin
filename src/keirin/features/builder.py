@@ -27,6 +27,9 @@ FEATURE_COLUMNS = [
     # --- Recent form ---
     "avg_finish_5", "top3_rate_5", "top3_rate_10", "top3_rate_20",
     "win_rate_10", "form_trend", "rest_days",
+    "win_last_race", "top3_last_race",
+    # --- Field context ---
+    "relative_rating", "avg_opponent_rating",
     # --- Kimarite style ---
     "km_nige", "km_maki", "km_sashi", "km_mark",
     # --- Venue ---
@@ -125,9 +128,10 @@ def build_race_features(
         trend = player_form.recent_trend(engine, ref_date)[["form_trend"]]
         rest = player_form.rest_days(engine, ref_date)
         km = player_form.kimarite_dist(engine, ref_date)
+        lrr = player_form.last_race_result(engine, ref_date)
     except Exception as e:
         log.warning("player_form features failed: %s", e)
-        pf5 = pf10 = pf20 = trend = rest = km = pd.DataFrame()
+        pf5 = pf10 = pf20 = trend = rest = km = lrr = pd.DataFrame()
 
     # --- 5. Venue ---------------------------------------------------------------
     try:
@@ -173,7 +177,7 @@ def build_race_features(
 
     # --- 8. Join all player-level frames onto entries --------------------------
     entries = entries.set_index("player_id")
-    for frame in [pf5, pf10, pf20, trend, rest, km, vs, bl, h2h, grd]:
+    for frame in [pf5, pf10, pf20, trend, rest, km, vs, bl, h2h, grd, lrr]:
         if not frame.empty:
             entries = entries.join(frame, how="left")
     entries = entries.reset_index().rename(columns={"index": "player_id"})
@@ -184,6 +188,16 @@ def build_race_features(
         if not frame.empty:
             entries = entries.join(frame, how="left")
     entries = entries.reset_index().rename(columns={"index": "car_no"})
+
+    # --- 8b. Field-relative rating (computed from entries, no SQL needed) ------
+    if "rating" in entries.columns and entries["rating"].notna().sum() > 1:
+        filled = entries["rating"].fillna(entries["rating"].mean())
+        n = len(filled)
+        entries["avg_opponent_rating"] = (filled.sum() - filled) / (n - 1)
+        entries["relative_rating"] = entries["rating"] - entries["avg_opponent_rating"]
+    else:
+        entries["avg_opponent_rating"] = float("nan")
+        entries["relative_rating"] = float("nan")
 
     # --- 9. Divergence signals --------------------------------------------------
     if latest_odds is not None and not entries.empty:

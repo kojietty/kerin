@@ -29,6 +29,9 @@ TRAIN_FEATURES = [
     # Recent form
     "avg_finish_5", "top3_rate_5", "top3_rate_10", "top3_rate_20",
     "win_rate_10", "form_trend", "rest_days",
+    "win_last_race", "top3_last_race",
+    # Field context
+    "relative_rating", "avg_opponent_rating",
     # Kimarite (many will be NaN if not scraped — LightGBM handles it)
     "km_nige", "km_maki", "km_sashi", "km_mark",
     # Venue
