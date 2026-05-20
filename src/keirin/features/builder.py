@@ -329,11 +329,12 @@ def _add_target(engine: Engine, entries: pd.DataFrame) -> pd.DataFrame:
         )
     if results.empty:
         entries[TARGET] = None
+        entries["finish"] = None
         return entries
     # top3=1 for finishing cars, 0 for everyone else (all scratched cars too = 0).
     # Merge so unmatched entries (finish > 3 or no result row) get NaN, then fill 0.
     results[TARGET] = (results["finish"] <= 3).astype(int)
-    merged = entries.merge(results[["car_no", TARGET]], on="car_no", how="left")
+    merged = entries.merge(results[["car_no", TARGET, "finish"]], on="car_no", how="left")
     # Cars that raced but didn't place top-3 get 0; truly missing data stays NaN.
     has_any_result = not results.empty
     if has_any_result:

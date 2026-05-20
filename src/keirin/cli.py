@@ -360,7 +360,8 @@ def sample_dashboard_cmd(out_path: str | None) -> None:
 @click.option("--date", "date_s", default="today", help="today/yesterday/YYYY-MM-DD")
 @click.option("--venue", "venue_s", default=None, help="会場コード 2桁 e.g. 11")
 @click.option("--race-no", "race_no", default=None, type=int, help="レース番号 e.g. 11")
-@click.option("--with-odds/--no-odds", default=True, help="オッズを取得してEV計算")
+@click.option("--with-odds/--no-odds", default=True,
+              help="オッズを取得して乖離特徴量に利用 (予測精度向上のため・賭け推奨はしない)")
 @click.option("--similar-n", default=5, type=int, help="類似レース表示件数")
 @click.option("--out", "out_path", default=None, help="HTML出力パス")
 def analyze_cmd(
@@ -372,9 +373,12 @@ def analyze_cmd(
     similar_n: int,
     out_path: str | None,
 ) -> None:
-    """単レース詳細分析: 出走データ・ライン並び・類似レース・着順予想。"""
+    """単レース着順予想: 出走データ・ライン並び・類似レース・予測順位。
+
+    予測精度に特化したコマンド。賭けるかどうかはユーザーが判断。
+    """
     from keirin.models.predict import analyze_race
-    from keirin.models.train import load_latest_model
+    from keirin.models.train import load_latest_model, load_latest_ranker
     from keirin.features.builder import build_race_features
     from keirin.reporting.analyze import render_analysis_terminal
     from sqlalchemy import text
@@ -443,6 +447,11 @@ def analyze_cmd(
         return
     model, feature_cols, calibrator = bundle
 
+    ranker_bundle = load_latest_ranker(cfg.paths.models)
+    ranker, ranker_features = ranker_bundle if ranker_bundle else (None, None)
+    if ranker is None:
+        click.echo("注: LambdaRank モデルなし → PL近似で着順予想 (retrain で精度向上)")
+
     # --- Build features ---
     click.echo("特徴量を構築中...")
     df = build_race_features(engine, race_id, ref_date=date_iso, latest_odds=latest_odds)
@@ -454,12 +463,12 @@ def analyze_cmd(
     model_files = sorted(cfg.paths.models.glob("lgbm_top3_*.pkl"))
     model_version = model_files[-1].stem if model_files else "unknown"
 
-    # --- Analyze ---
-    click.echo("分析中...")
+    # --- Analyze (prediction-only, no betting) ---
+    click.echo("予測中...")
     result = analyze_race(
         engine, race_id, df, model, feature_cols, calibrator,
+        ranker=ranker, ranker_features=ranker_features,
         similar_n=similar_n,
-        latest_odds=latest_odds,
         model_version=model_version,
     )
 

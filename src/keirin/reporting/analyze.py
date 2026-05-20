@@ -77,8 +77,9 @@ def render_analysis_terminal(analysis: dict[str, Any]) -> str:
         lines.append(click.style("\n【過去の似たようなレース】", fg="yellow", bold=True))
         lines.append("  (類似レースが見つかりませんでした — 学習データ不足の可能性)")
 
-    # ── Ranking prediction ────────────────────────────────────────────────
-    lines.append(click.style("\n【着順予想】", fg="yellow", bold=True))
+    # ── Ranking prediction (the core output) ─────────────────────────────
+    model_label = "LambdaRank" if analysis.get("used_ranker") else "PL-from-Top3"
+    lines.append(click.style(f"\n【着順予想】 ({model_label})", fg="yellow", bold=True))
     ranking = analysis.get("ranking", [])
     for rank, r in enumerate(ranking, 1):
         p1 = r.get("pred_prob_1st", 0.0)
@@ -91,31 +92,23 @@ def render_analysis_terminal(analysis: dict[str, Any]) -> str:
             f"  予測{rank:>2}位: {r['car_no']:>2}番 {name:<8} "
             f"  1着:{p1:5.1%}  2着:{p2:5.1%}  3着:{p3:5.1%}  [{bar}]"
         )
-        if rank <= 3:
-            lines.append(click.style(row_str, fg="green" if rank == 1 else "bright_green"))
+        if rank == 1:
+            lines.append(click.style(row_str, fg="green", bold=True))
+        elif rank <= 3:
+            lines.append(click.style(row_str, fg="bright_green"))
         else:
             lines.append(click.style(row_str, fg="bright_black"))
 
-    # ── Bet picks ─────────────────────────────────────────────────────────
-    if analysis.get("has_odds"):
-        if analysis.get("picks"):
-            lines.append(click.style("\n【三連単推奨】", fg="yellow", bold=True))
-            for p in analysis["picks"]:
-                combo = "-".join(str(c) for c in p["cars"])
-                ev = p.get("ev", 0.0)
-                stake = p.get("stake_yen", 0)
-                ev_color = "green" if ev >= 1.50 else ("bright_green" if ev >= 1.30 else "white")
-                row_str = (
-                    f"  {combo}  オッズ:{p['odds']:5.1f}  確率:{p['prob']:5.1%}"
-                    f"  EV:{ev:.2f}  賭け金:¥{stake}"
-                )
-                lines.append(click.style(row_str, fg=ev_color))
-        else:
-            lines.append(click.style("\n【三連単推奨】", fg="yellow", bold=True))
-            lines.append("  EV基準を満たすbet候補なし (見送り推奨)")
-    else:
-        lines.append(click.style("\n  ※ オッズなし → 賭け推奨なし", fg="bright_black"))
-        lines.append(click.style("    --with-odds を使うか fetch --kind odds を先に実行", fg="bright_black"))
+    # Top 3 confidence summary
+    if len(ranking) >= 3:
+        top3_combined = sum(r.get("pred_prob_1st", 0) for r in ranking[:3])
+        lines.append(
+            click.style(
+                f"\n  上位3車の合計1着確率: {top3_combined:.1%}",
+                fg="cyan",
+            )
+        )
 
     lines.append(click.style("\n" + "─" * W, fg="cyan"))
+    lines.append(click.style("  賭けるかどうかはオッズとあなたの判断で決めてください。", fg="bright_black"))
     return "\n".join(lines)

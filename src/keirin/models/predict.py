@@ -151,22 +151,33 @@ def predict_today(
     }
 
 
-def rank_prediction(p_top3: dict[int, float]) -> list[dict]:
-    """Derive predicted finish order from p_top3 using Plackett-Luce.
+def rank_prediction(
+    p_top3: dict[int, float],
+    *,
+    rank_scores: dict[int, float] | None = None,
+) -> list[dict]:
+    """Derive predicted finish order with Plackett-Luce probabilities.
 
-    For each car computes P(1st), P(2nd), P(3rd) and an expected rank score.
-    No new model needed — reuses the existing binary classifier strengths.
+    If `rank_scores` (LambdaRank ranker output) is provided, those scores
+    are converted to PL strengths — this directly optimises ranking quality.
+    Otherwise falls back to deriving strengths from p_top3 via -log(1-p).
     Returns list sorted by expected rank ascending (best prediction first).
     """
     import math
     from itertools import permutations
 
-    cars = list(p_top3.keys())
+    cars = list(p_top3.keys()) if not rank_scores else list(rank_scores.keys())
     if not cars:
         return []
 
-    probs = {c: max(min(p_top3[c], 0.9999), 0.0001) for c in cars}
-    strengths = {c: -math.log(1.0 - probs[c]) for c in cars}
+    if rank_scores:
+        # Ranker outputs continuous scores; convert to PL strengths via exp.
+        # Subtract max for numerical stability (softmax-style).
+        s_max = max(rank_scores.get(c, 0.0) for c in cars)
+        strengths = {c: math.exp(rank_scores.get(c, 0.0) - s_max) for c in cars}
+    else:
+        probs = {c: max(min(p_top3[c], 0.9999), 0.0001) for c in cars}
+        strengths = {c: -math.log(1.0 - probs[c]) for c in cars}
     total = sum(strengths.values())
 
     p1: dict[int, float] = {c: 0.0 for c in cars}
@@ -209,26 +220,27 @@ def analyze_race(
     feature_cols: list[str],
     calibrator,
     *,
+    ranker=None,
+    ranker_features: list[str] | None = None,
     similar_n: int = 5,
-    latest_odds: dict[str, float] | None = None,
     lookback_days: int = 365,
     model_version: str = "unknown",
 ) -> dict:
-    """Full single-race analysis.
+    """Full single-race analysis focused on ranking prediction.
+
+    Pure prediction pipeline — no betting/EV/Kelly logic. The user decides
+    whether to bet based on the ranking output.
+
+    If `ranker` (LambdaRank model) is provided, ranking probabilities are
+    derived from its scores. Otherwise falls back to Plackett-Luce expansion
+    of the binary top-3 classifier output.
 
     Returns a structured dict with participants, lines, similar races,
-    ranking prediction, and optional bet picks.
+    and ranking prediction.
     """
     from sqlalchemy import text as _text
-    from keirin.models.combo import expand_trifecta
-    from keirin.betting.ev import build_candidates
-    from keirin.betting.selector import select_picks
-    from keirin.betting.stake import plan_stakes
-    from keirin.config import load_betting_config
-    from keirin.db.repository import month_pnl
     from keirin.features.similar_races import race_fingerprint, find_similar_races
     from keirin.features.line import mismatch_score
-    from datetime import datetime
 
     date_iso = f"{race_id[0:4]}-{race_id[4:6]}-{race_id[6:8]}"
 
@@ -272,7 +284,19 @@ def analyze_race(
 
     # --- Prediction ---
     p_top3 = predict_race(df, model, feature_cols, calibrator)
-    ranking = rank_prediction(p_top3)
+
+    # If a LambdaRank ranker is available, use its scores as PL strengths
+    # (directly optimises ranking metrics, more accurate than PL-from-binary).
+    rank_scores: dict[int, float] | None = None
+    if ranker is not None and ranker_features and not df.empty:
+        try:
+            X_rank = df.reindex(columns=ranker_features, fill_value=np.nan).values.astype(np.float32)
+            scores = ranker.predict(X_rank)
+            rank_scores = dict(zip(df["car_no"].tolist(), [float(s) for s in scores]))
+        except Exception:
+            log.debug("ranker.predict failed", exc_info=True)
+
+    ranking = rank_prediction(p_top3, rank_scores=rank_scores)
 
     # Attach player names to ranking
     pid_by_car: dict[int, str] = {}
@@ -359,33 +383,6 @@ def analyze_race(
     except Exception:
         log.debug("similar_races lookup failed", exc_info=True)
 
-    # --- Bets (if odds available) ---
-    picks_out: list[dict] = []
-    has_odds = latest_odds is not None and len(latest_odds) > 0
-    if has_odds:
-        try:
-            bcfg = load_betting_config()
-            combo_probs = expand_trifecta(p_top3, method=bcfg.combo_method)
-            candidates = build_candidates(combo_probs, latest_odds)
-            sel = select_picks(candidates, bcfg)
-
-            ym = datetime.now().strftime("%Y-%m")
-            mtd = month_pnl(engine, ym).get("pnl", 0)
-            plan = plan_stakes(sel.picks, bcfg, month_to_date_pnl_yen=mtd)
-
-            for assign in plan.assignments:
-                p = assign.pick
-                cars = [int(x) for x in p.combo.split("-")]
-                picks_out.append({
-                    "cars": cars,
-                    "odds": p.odds,
-                    "prob": p.prob,
-                    "ev": p.ev,
-                    "stake_yen": assign.stake_yen if not plan.emergency_stop_triggered else 0,
-                })
-        except Exception:
-            log.debug("pick generation failed", exc_info=True)
-
     return {
         "race_id": race_id,
         "date": meta.get("date", date_iso),
@@ -395,12 +392,11 @@ def analyze_race(
         "bank_length": meta.get("bank_length"),
         "distance_m": meta.get("distance_m"),
         "model_version": model_version,
+        "used_ranker": rank_scores is not None,
         "participants": participants,
         "lines": lines_out,
         "similar_races": similar,
         "ranking": ranking,
-        "picks": picks_out,
-        "has_odds": has_odds,
     }
 
 

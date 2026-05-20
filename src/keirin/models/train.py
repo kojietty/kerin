@@ -162,6 +162,108 @@ def walk_forward_eval(
     return results
 
 
+def _finish_to_relevance(finish: float | int) -> int:
+    """Convert finish position to LambdaRank relevance score.
+
+    Higher = better. 1st=10, 2nd=7, 3rd=5, 4th-6th=1, rest=0.
+    Non-linear gain emphasizes top placements (matches NDCG semantics).
+    """
+    if finish is None or (isinstance(finish, float) and np.isnan(finish)):
+        return 0
+    f = int(finish)
+    if f == 1:
+        return 10
+    if f == 2:
+        return 7
+    if f == 3:
+        return 5
+    if f <= 6:
+        return 1
+    return 0
+
+
+def train_ranker(
+    df: pd.DataFrame,
+    *,
+    val_df: pd.DataFrame | None = None,
+    n_estimators: int = 500,
+    learning_rate: float = 0.05,
+    num_leaves: int = 31,
+    min_child_samples: int = 30,
+) -> tuple[Any, list[str]]:
+    """Train LightGBM LambdaRank model for direct ranking optimization.
+
+    Returns (ranker, feature_cols). Targets NDCG@1 and NDCG@3 — the metrics
+    we actually care about (predicting the actual winner and full podium).
+    """
+    try:
+        import lightgbm as lgb
+    except ImportError:
+        raise RuntimeError("lightgbm not installed — run: pip install lightgbm")
+
+    feature_cols = [c for c in TRAIN_FEATURES if c in df.columns]
+
+    # Ranker needs race grouping: drop rows without finish, sort by race_id
+    df_clean = df.dropna(subset=["finish"]).copy()
+    df_clean = df_clean.sort_values("race_id").reset_index(drop=True)
+    if df_clean.empty:
+        raise ValueError("No training data with finish positions for ranker")
+
+    df_clean["_relevance"] = df_clean["finish"].apply(_finish_to_relevance)
+
+    X = df_clean[feature_cols].values.astype(np.float32)
+    y = df_clean["_relevance"].values.astype(np.int32)
+    groups = df_clean.groupby("race_id", sort=False).size().values
+
+    params = {
+        "objective": "lambdarank",
+        "metric": "ndcg",
+        "eval_at": [1, 3],
+        "n_estimators": n_estimators,
+        "learning_rate": learning_rate,
+        "num_leaves": num_leaves,
+        "min_child_samples": min_child_samples,
+        "feature_fraction": 0.8,
+        "bagging_fraction": 0.8,
+        "bagging_freq": 5,
+        "verbose": -1,
+        "n_jobs": -1,
+        "random_state": 42,
+        "label_gain": list(range(11)),
+    }
+
+    ranker = lgb.LGBMRanker(**params)
+
+    fit_kwargs: dict = {"group": groups}
+    if val_df is not None and not val_df.empty:
+        val_clean = val_df.dropna(subset=["finish"]).copy()
+        val_clean = val_clean.sort_values("race_id").reset_index(drop=True)
+        if not val_clean.empty:
+            val_clean["_relevance"] = val_clean["finish"].apply(_finish_to_relevance)
+            X_val = val_clean[feature_cols].reindex(columns=feature_cols, fill_value=np.nan).values.astype(np.float32)
+            y_val = val_clean["_relevance"].values.astype(np.int32)
+            val_groups = val_clean.groupby("race_id", sort=False).size().values
+            fit_kwargs["eval_set"] = [(X_val, y_val)]
+            fit_kwargs["eval_group"] = [val_groups]
+            fit_kwargs["callbacks"] = [
+                lgb.early_stopping(50, verbose=False),
+                lgb.log_evaluation(-1),
+            ]
+
+    ranker.fit(X, y, **fit_kwargs)
+    return ranker, feature_cols
+
+
+def load_latest_ranker(models_dir: Path) -> tuple[Any, list[str]] | None:
+    """Load the most recent LambdaRank model. Returns (ranker, feature_cols) or None."""
+    files = sorted(models_dir.glob("lgbm_rank_v*.pkl"), reverse=True)
+    if not files:
+        return None
+    data = joblib.load(files[0])
+    log.info("Loaded ranker %s", files[0].name)
+    return data["model"], data["feature_cols"]
+
+
 def retrain_and_save(
     engine,
     models_dir: Path,
@@ -213,6 +315,15 @@ def retrain_and_save(
         raw_probs, y_cal,
         out_path=models_dir / f"calibrator_v{stamp}.pkl",
     )
+
+    # Train LambdaRank ranker on the same data (directly optimises ranking)
+    try:
+        ranker, ranker_feature_cols = train_ranker(df_train, val_df=df_cal)
+        ranker_path = models_dir / f"lgbm_rank_v{stamp}.pkl"
+        joblib.dump({"model": ranker, "feature_cols": ranker_feature_cols}, ranker_path)
+        log.info("Ranker saved to %s", ranker_path)
+    except Exception as e:
+        log.warning("train_ranker failed: %s — continuing with classifier only", e)
 
     # Save walk-forward metrics for reference
     try:
