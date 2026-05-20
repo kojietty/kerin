@@ -15,7 +15,7 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from keirin.features import gear, line, odds_divergence, player_form, venue
+from keirin.features import gear, line, matchup, odds_divergence, player_form, venue
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,9 @@ FEATURE_COLUMNS = [
     "score_odds_gap", "rest_day_signal", "venue_specialist_discount",
     "form_rebound_signal", "line_mismatch_signal",
     "divergence_score",
+    # --- Matchup (head-to-head vs. this specific field) ---
+    "h2h_win_rate", "h2h_top3_rate", "h2h_n_encounters",
+    "grade_top3_rate",
 ]
 
 # Target column
@@ -134,6 +137,20 @@ def build_race_features(
         log.warning("venue features failed: %s", e)
         vs = bl = pd.DataFrame()
 
+    # --- 6a. Matchup features (head-to-head vs. this field + grade form) -------
+    try:
+        pids = entries["player_id"].dropna().tolist()
+        grade_val = (
+            entries["grade"].dropna().iloc[0]
+            if "grade" in entries.columns and not entries["grade"].dropna().empty
+            else None
+        )
+        h2h = matchup.h2h_stats(engine, pids, ref_date)
+        grd = matchup.grade_form(engine, pids, ref_date, grade_val)
+    except Exception as e:
+        log.warning("matchup features failed: %s", e)
+        h2h = grd = pd.DataFrame()
+
     # --- 6. Line ----------------------------------------------------------------
     try:
         lf = line.line_features(engine, race_id)
@@ -156,7 +173,7 @@ def build_race_features(
 
     # --- 8. Join all player-level frames onto entries --------------------------
     entries = entries.set_index("player_id")
-    for frame in [pf5, pf10, pf20, trend, rest, km, vs, bl]:
+    for frame in [pf5, pf10, pf20, trend, rest, km, vs, bl, h2h, grd]:
         if not frame.empty:
             entries = entries.join(frame, how="left")
     entries = entries.reset_index().rename(columns={"index": "player_id"})

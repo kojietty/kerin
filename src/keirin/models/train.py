@@ -42,6 +42,9 @@ TRAIN_FEATURES = [
     # Race context
     "grade_gp", "grade_g1", "grade_g2", "grade_g3", "grade_f1", "grade_f2",
     "car_no",
+    # Matchup (head-to-head vs. this specific field + grade specialisation)
+    "h2h_win_rate", "h2h_top3_rate", "h2h_n_encounters",
+    "grade_top3_rate",
 ]
 
 
@@ -180,6 +183,100 @@ def _finish_to_relevance(finish: float | int) -> int:
     if f <= 6:
         return 1
     return 0
+
+
+def _ndcg_at_k(y_true: np.ndarray, y_score: np.ndarray, k: int) -> float:
+    """NDCG@k for a single race (query).
+
+    Uses exponential gain (2^rel - 1) matching LambdaRank's internal objective.
+    Returns 0.0 for degenerate inputs (all-zero relevance, empty arrays).
+    """
+    n = len(y_true)
+    if n == 0 or k == 0:
+        return 0.0
+    k = min(k, n)
+
+    pred_order = np.argsort(-y_score)
+    ideal_order = np.argsort(-y_true)
+
+    def _dcg(order: np.ndarray) -> float:
+        return sum(
+            (2.0 ** float(y_true[order[i]]) - 1.0) / np.log2(i + 2.0)
+            for i in range(k)
+        )
+
+    idcg = _dcg(ideal_order)
+    return _dcg(pred_order) / idcg if idcg > 0.0 else 0.0
+
+
+def walk_forward_ranker_eval(
+    df: pd.DataFrame,
+    *,
+    train_months: int = 2,
+    val_months: int = 1,
+) -> list[dict[str, Any]]:
+    """Walk-forward NDCG@1 and NDCG@3 evaluation for the LambdaRank model.
+
+    Uses the same fold structure as walk_forward_eval() so the binary
+    classifier and ranker metrics are directly comparable.
+    Returns list of per-fold dicts (empty if not enough months).
+    """
+    df = df.copy()
+    df["_month"] = pd.to_datetime(df["race_id"].str[:6], format="%Y%m").dt.to_period("M")
+    months = sorted(df["_month"].unique())
+
+    if len(months) < train_months + val_months:
+        log.warning("walk_forward_ranker_eval: not enough months (%d)", len(months))
+        return []
+
+    results = []
+    for i in range(train_months, len(months) - val_months + 1):
+        train_periods = months[i - train_months: i]
+        val_periods = months[i: i + val_months]
+
+        train = df[df["_month"].isin(train_periods)].dropna(subset=["finish"])
+        val = df[df["_month"].isin(val_periods)].dropna(subset=["finish"])
+
+        if len(train) < 200 or len(val) < 50:
+            continue
+
+        try:
+            ranker, feature_cols = train_ranker(train, val_df=val)
+        except Exception as exc:
+            log.warning("walk_forward_ranker_eval fold failed: %s", exc)
+            continue
+
+        ndcg1_list: list[float] = []
+        ndcg3_list: list[float] = []
+
+        for _, race_df in val.groupby("race_id"):
+            if len(race_df) < 2:
+                continue
+            X = race_df.reindex(columns=feature_cols, fill_value=np.nan).values.astype(np.float32)
+            y_rel = race_df["finish"].apply(_finish_to_relevance).values.astype(float)
+            scores = ranker.predict(X).astype(float)
+            ndcg1_list.append(_ndcg_at_k(y_rel, scores, k=1))
+            ndcg3_list.append(_ndcg_at_k(y_rel, scores, k=3))
+
+        ndcg1 = float(np.mean(ndcg1_list)) if ndcg1_list else float("nan")
+        ndcg3 = float(np.mean(ndcg3_list)) if ndcg3_list else float("nan")
+
+        fold = {
+            "train_period": [str(p) for p in train_periods],
+            "val_period": [str(p) for p in val_periods],
+            "n_train": len(train),
+            "n_val": len(val),
+            "n_val_races": len(ndcg1_list),
+            "ndcg_at_1": round(ndcg1, 4),
+            "ndcg_at_3": round(ndcg3, 4),
+        }
+        results.append(fold)
+        log.info(
+            "ranker fold val=%s  n_train=%d  n_val=%d  NDCG@1=%.4f  NDCG@3=%.4f",
+            val_periods, len(train), len(val), ndcg1, ndcg3,
+        )
+
+    return results
 
 
 def train_ranker(
@@ -325,7 +422,7 @@ def retrain_and_save(
     except Exception as e:
         log.warning("train_ranker failed: %s — continuing with classifier only", e)
 
-    # Save walk-forward metrics for reference
+    # Walk-forward metrics for binary classifier
     try:
         wf = walk_forward_eval(df_clean)
         if wf:
@@ -334,6 +431,18 @@ def retrain_and_save(
             log.info("Walk-forward metrics: %s", wf[-1])
     except Exception as e:
         log.warning("walk_forward_eval failed: %s", e)
+
+    # Walk-forward NDCG metrics for LambdaRank ranker
+    try:
+        wf_rank = walk_forward_ranker_eval(df_clean)
+        if wf_rank:
+            rank_metrics_path = models_dir / f"wf_ranker_metrics_v{stamp}.json"
+            rank_metrics_path.write_text(
+                json.dumps(wf_rank, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            log.info("Ranker walk-forward metrics: %s", wf_rank[-1])
+    except Exception as e:
+        log.warning("walk_forward_ranker_eval failed: %s", e)
 
     return model_path
 
