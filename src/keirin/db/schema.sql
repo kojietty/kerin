@@ -174,3 +174,32 @@ CREATE INDEX IF NOT EXISTS idx_odds_snapshot      ON odds_trifecta(race_id, snap
 CREATE INDEX IF NOT EXISTS idx_bets_race          ON bets(race_id);
 CREATE INDEX IF NOT EXISTS idx_bets_placed_at     ON bets(placed_at);
 CREATE INDEX IF NOT EXISTS idx_fetch_log_url      ON fetch_log(url, fetched_at);
+
+-- ---------------------------------------------------------------------------
+-- Prediction log (for feedback loop and accuracy tracking)
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS prediction_log (
+    log_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    race_id             TEXT NOT NULL,
+    predicted_at        TEXT NOT NULL,
+    pred_rank1_car      INTEGER,
+    pred_rank2_car      INTEGER,
+    pred_rank3_car      INTEGER,
+    pred_rank1_prob     REAL,
+    pred_rank2_prob     REAL,
+    pred_rank3_prob     REAL,
+    model_version       TEXT,
+    actual_rank1_car    INTEGER,
+    actual_rank2_car    INTEGER,
+    actual_rank3_car    INTEGER,
+    rank1_hit           INTEGER,         -- 1位完全一致
+    top3_hit            INTEGER,         -- 予測3車が実際のTop3に全部含まれる（任意順）
+    trifecta_exact_hit  INTEGER,         -- 三連単完全一致
+    settled_at          TEXT,
+    FOREIGN KEY (race_id) REFERENCES races(race_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_predlog_race  ON prediction_log(race_id);
+CREATE INDEX IF NOT EXISTS idx_predlog_date  ON prediction_log(predicted_at);
+CREATE INDEX IF NOT EXISTS idx_predlog_model ON prediction_log(model_version);

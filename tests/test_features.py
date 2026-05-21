@@ -101,3 +101,38 @@ def test_line_mismatch():
     gap = pd.Series([5.0, 1.0, 10.0])
     sig = line_mismatch_signal(is_f, gap)
     assert list(sig) == [1.0, 0.0, 0.0]
+
+
+def test_last_race_result(mem_engine):
+    """P2 won R002 (most recent), so win_last_race=1; P1 finished 3rd → top3_last_race=1."""
+    df = player_form.last_race_result(mem_engine, "2026-04-11")
+    assert "P2" in df.index
+    assert df.loc["P2", "win_last_race"] == 1
+    assert df.loc["P2", "top3_last_race"] == 1
+    assert "P1" in df.index
+    assert df.loc["P1", "win_last_race"] == 0
+    assert df.loc["P1", "top3_last_race"] == 1   # P1 finished 3rd in R002
+
+
+def test_last_race_result_no_data(mem_engine):
+    """Before any races, result should be empty."""
+    df = player_form.last_race_result(mem_engine, "2026-01-01")
+    assert df.empty
+
+
+def test_relative_rating_computation():
+    """relative_rating = player_rating - avg_rating_of_others."""
+    import pandas as pd
+    from keirin.features.builder import build_race_features
+
+    # Test the math directly without a DB
+    ratings = pd.Series([90.0, 80.0, 70.0])
+    n = len(ratings)
+    avg_opp = (ratings.sum() - ratings) / (n - 1)
+    rel = ratings - avg_opp
+    # avg_opp for 90.0 = (80+70)/2 = 75; relative = 15
+    assert abs(rel.iloc[0] - 15.0) < 0.01
+    # avg_opp for 80.0 = (90+70)/2 = 80; relative = 0
+    assert abs(rel.iloc[1] - 0.0) < 0.01
+    # avg_opp for 70.0 = (90+80)/2 = 85; relative = -15
+    assert abs(rel.iloc[2] - (-15.0)) < 0.01

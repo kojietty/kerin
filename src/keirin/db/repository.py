@@ -322,6 +322,181 @@ def log_fetch(engine: Engine, url: str, status: int, bytes_: int) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Prediction log
+# ---------------------------------------------------------------------------
+
+def log_prediction(
+    engine: Engine,
+    *,
+    race_id: str,
+    pred_rank1_car: int,
+    pred_rank2_car: int,
+    pred_rank3_car: int,
+    pred_rank1_prob: float,
+    pred_rank2_prob: float,
+    pred_rank3_prob: float,
+    model_version: str,
+    predicted_at: str | None = None,
+) -> int:
+    """Insert a prediction log row. Returns log_id."""
+    predicted_at = predicted_at or datetime.now().isoformat(timespec="seconds")
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                INSERT INTO prediction_log
+                  (race_id, predicted_at, pred_rank1_car, pred_rank2_car, pred_rank3_car,
+                   pred_rank1_prob, pred_rank2_prob, pred_rank3_prob, model_version)
+                VALUES
+                  (:race_id, :predicted_at, :p1c, :p2c, :p3c, :p1p, :p2p, :p3p, :mv)
+                """
+            ),
+            {
+                "race_id": race_id,
+                "predicted_at": predicted_at,
+                "p1c": pred_rank1_car,
+                "p2c": pred_rank2_car,
+                "p3c": pred_rank3_car,
+                "p1p": float(pred_rank1_prob),
+                "p2p": float(pred_rank2_prob),
+                "p3p": float(pred_rank3_prob),
+                "mv": model_version,
+            },
+        )
+        return int(result.lastrowid or 0)
+
+
+def settle_prediction_log(engine: Engine, race_id: str) -> int:
+    """Fill actual finish positions and hit flags from the results table.
+
+    Called after settle_bets_for_race() in the record-result flow.
+    Returns the number of rows updated.
+    """
+    with engine.begin() as conn:
+        result_rows = conn.execute(
+            text(
+                "SELECT car_no, finish FROM results WHERE race_id = :rid AND finish IN (1, 2, 3)"
+            ),
+            {"rid": race_id},
+        ).fetchall()
+
+        if not result_rows:
+            return 0
+
+        finish_to_car = {int(r[1]): int(r[0]) for r in result_rows}
+        actual_1 = finish_to_car.get(1)
+        actual_2 = finish_to_car.get(2)
+        actual_3 = finish_to_car.get(3)
+        if actual_1 is None:
+            return 0
+
+        actual_set = {c for c in (actual_1, actual_2, actual_3) if c is not None}
+
+        preds = conn.execute(
+            text(
+                """
+                SELECT log_id, pred_rank1_car, pred_rank2_car, pred_rank3_car
+                FROM prediction_log
+                WHERE race_id = :rid AND settled_at IS NULL
+                """
+            ),
+            {"rid": race_id},
+        ).fetchall()
+
+        n = 0
+        settled_at = datetime.now().isoformat(timespec="seconds")
+        for log_id, p1, p2, p3 in preds:
+            pred_set = {c for c in (p1, p2, p3) if c is not None}
+            rank1_hit = 1 if p1 == actual_1 else 0
+            top3_hit = 1 if pred_set == actual_set else 0
+            exact_hit = 1 if (p1 == actual_1 and p2 == actual_2 and p3 == actual_3) else 0
+            conn.execute(
+                text(
+                    """
+                    UPDATE prediction_log SET
+                      actual_rank1_car = :a1, actual_rank2_car = :a2, actual_rank3_car = :a3,
+                      rank1_hit = :r1h, top3_hit = :t3h, trifecta_exact_hit = :exa,
+                      settled_at = :sat
+                    WHERE log_id = :lid
+                    """
+                ),
+                {
+                    "a1": actual_1, "a2": actual_2, "a3": actual_3,
+                    "r1h": rank1_hit, "t3h": top3_hit, "exa": exact_hit,
+                    "sat": settled_at, "lid": log_id,
+                },
+            )
+            n += 1
+        return n
+
+
+def accuracy_metrics(
+    engine: Engine,
+    *,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    model_version: str | None = None,
+) -> dict[str, Any]:
+    """Aggregate prediction_log for accuracy statistics."""
+    from_dt = (from_date or "2020-01-01") + "T00:00:00"
+    to_dt = (to_date or datetime.now().isoformat()[:10]) + "T23:59:59"
+
+    params: dict[str, Any] = {"from_dt": from_dt, "to_dt": to_dt}
+    extra = ""
+    if model_version:
+        extra = " AND model_version = :mv"
+        params["mv"] = model_version
+
+    base_where = f"predicted_at >= :from_dt AND predicted_at <= :to_dt{extra}"
+
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                f"""
+                SELECT COUNT(*),
+                       SUM(CASE WHEN settled_at IS NOT NULL THEN 1 ELSE 0 END),
+                       SUM(COALESCE(rank1_hit, 0)),
+                       SUM(COALESCE(top3_hit, 0)),
+                       SUM(COALESCE(trifecta_exact_hit, 0))
+                FROM prediction_log WHERE {base_where}
+                """
+            ),
+            params,
+        ).fetchone()
+
+        total, settled, r1_hits, t3_hits, ex_hits = (row or (0, 0, 0, 0, 0))
+        total = int(total or 0)
+        settled = int(settled or 0)
+
+        monthly = conn.execute(
+            text(
+                f"""
+                SELECT substr(predicted_at, 1, 7) as month,
+                       COUNT(*) as cnt,
+                       ROUND(1.0 * SUM(COALESCE(rank1_hit, 0)) / MAX(COUNT(*), 1), 3),
+                       ROUND(1.0 * SUM(COALESCE(top3_hit, 0))  / MAX(COUNT(*), 1), 3)
+                FROM prediction_log
+                WHERE {base_where} AND settled_at IS NOT NULL
+                GROUP BY month ORDER BY month
+                """
+            ),
+            params,
+        ).fetchall()
+
+    return {
+        "total_predictions": total,
+        "settled": settled,
+        "rank1_hit_rate": round(int(r1_hits) / settled, 3) if settled else None,
+        "top3_hit_rate": round(int(t3_hits) / settled, 3) if settled else None,
+        "trifecta_exact_hit_rate": round(int(ex_hits) / settled, 3) if settled else None,
+        "monthly": [
+            {"month": r[0], "count": int(r[1]), "rank1_rate": r[2], "top3_rate": r[3]}
+            for r in monthly
+        ],
+    }
+
+
 def recently_fetched(engine: Engine, url: str, within_hours: int = 24) -> bool:
     with engine.begin() as conn:
         row = conn.execute(

@@ -15,7 +15,7 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from keirin.features import gear, line, odds_divergence, player_form, venue
+from keirin.features import gear, line, matchup, odds_divergence, player_form, venue
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +27,9 @@ FEATURE_COLUMNS = [
     # --- Recent form ---
     "avg_finish_5", "top3_rate_5", "top3_rate_10", "top3_rate_20",
     "win_rate_10", "form_trend", "rest_days",
+    "win_last_race", "top3_last_race",
+    # --- Field context ---
+    "relative_rating", "avg_opponent_rating",
     # --- Kimarite style ---
     "km_nige", "km_maki", "km_sashi", "km_mark",
     # --- Venue ---
@@ -45,6 +48,9 @@ FEATURE_COLUMNS = [
     "score_odds_gap", "rest_day_signal", "venue_specialist_discount",
     "form_rebound_signal", "line_mismatch_signal",
     "divergence_score",
+    # --- Matchup (head-to-head vs. this specific field) ---
+    "h2h_win_rate", "h2h_top3_rate", "h2h_n_encounters",
+    "grade_top3_rate",
 ]
 
 # Target column
@@ -122,9 +128,10 @@ def build_race_features(
         trend = player_form.recent_trend(engine, ref_date)[["form_trend"]]
         rest = player_form.rest_days(engine, ref_date)
         km = player_form.kimarite_dist(engine, ref_date)
+        lrr = player_form.last_race_result(engine, ref_date)
     except Exception as e:
         log.warning("player_form features failed: %s", e)
-        pf5 = pf10 = pf20 = trend = rest = km = pd.DataFrame()
+        pf5 = pf10 = pf20 = trend = rest = km = lrr = pd.DataFrame()
 
     # --- 5. Venue ---------------------------------------------------------------
     try:
@@ -133,6 +140,20 @@ def build_race_features(
     except Exception as e:
         log.warning("venue features failed: %s", e)
         vs = bl = pd.DataFrame()
+
+    # --- 6a. Matchup features (head-to-head vs. this field + grade form) -------
+    try:
+        pids = entries["player_id"].dropna().tolist()
+        grade_val = (
+            entries["grade"].dropna().iloc[0]
+            if "grade" in entries.columns and not entries["grade"].dropna().empty
+            else None
+        )
+        h2h = matchup.h2h_stats(engine, pids, ref_date)
+        grd = matchup.grade_form(engine, pids, ref_date, grade_val)
+    except Exception as e:
+        log.warning("matchup features failed: %s", e)
+        h2h = grd = pd.DataFrame()
 
     # --- 6. Line ----------------------------------------------------------------
     try:
@@ -156,7 +177,7 @@ def build_race_features(
 
     # --- 8. Join all player-level frames onto entries --------------------------
     entries = entries.set_index("player_id")
-    for frame in [pf5, pf10, pf20, trend, rest, km, vs, bl]:
+    for frame in [pf5, pf10, pf20, trend, rest, km, vs, bl, h2h, grd, lrr]:
         if not frame.empty:
             entries = entries.join(frame, how="left")
     entries = entries.reset_index().rename(columns={"index": "player_id"})
@@ -167,6 +188,16 @@ def build_race_features(
         if not frame.empty:
             entries = entries.join(frame, how="left")
     entries = entries.reset_index().rename(columns={"index": "car_no"})
+
+    # --- 8b. Field-relative rating (computed from entries, no SQL needed) ------
+    if "rating" in entries.columns and entries["rating"].notna().sum() > 1:
+        filled = entries["rating"].fillna(entries["rating"].mean())
+        n = len(filled)
+        entries["avg_opponent_rating"] = (filled.sum() - filled) / (n - 1)
+        entries["relative_rating"] = entries["rating"] - entries["avg_opponent_rating"]
+    else:
+        entries["avg_opponent_rating"] = float("nan")
+        entries["relative_rating"] = float("nan")
 
     # --- 9. Divergence signals --------------------------------------------------
     if latest_odds is not None and not entries.empty:
@@ -329,11 +360,12 @@ def _add_target(engine: Engine, entries: pd.DataFrame) -> pd.DataFrame:
         )
     if results.empty:
         entries[TARGET] = None
+        entries["finish"] = None
         return entries
     # top3=1 for finishing cars, 0 for everyone else (all scratched cars too = 0).
     # Merge so unmatched entries (finish > 3 or no result row) get NaN, then fill 0.
     results[TARGET] = (results["finish"] <= 3).astype(int)
-    merged = entries.merge(results[["car_no", TARGET]], on="car_no", how="left")
+    merged = entries.merge(results[["car_no", TARGET, "finish"]], on="car_no", how="left")
     # Cars that raced but didn't place top-3 get 0; truly missing data stays NaN.
     has_any_result = not results.empty
     if has_any_result:

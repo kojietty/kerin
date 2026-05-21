@@ -151,3 +151,42 @@ def scratch_rate(engine: Engine, ref_date: str, n_races: int = 30) -> pd.DataFra
         ref_date=ref_date, n=n_races,
     )
     return df.set_index("player_id")
+
+
+def last_race_result(engine: Engine, ref_date: str) -> pd.DataFrame:
+    """Result of each player's most recent race before ref_date.
+
+    Returns DataFrame indexed by player_id with:
+      win_last_race:   1 if finished 1st in their most recent race
+      top3_last_race:  1 if finished top-3 in their most recent race
+
+    The "just won last time" signal captures momentum that rolling averages
+    dilute — especially important for hot streaks.
+    """
+    df = _q(
+        engine,
+        """
+        WITH latest AS (
+          SELECT player_id, MAX(race_date) AS last_date
+          FROM player_race_log
+          WHERE race_date < :ref_date
+            AND scratched = 0
+            AND finish IS NOT NULL
+          GROUP BY player_id
+        )
+        SELECT
+          prl.player_id,
+          CASE WHEN prl.finish = 1  THEN 1 ELSE 0 END AS win_last_race,
+          CASE WHEN prl.finish <= 3 THEN 1 ELSE 0 END AS top3_last_race
+        FROM player_race_log prl
+        JOIN latest ON prl.player_id = latest.player_id
+                    AND prl.race_date = latest.last_date
+                    AND prl.scratched = 0
+                    AND prl.finish IS NOT NULL
+        """,
+        ref_date=ref_date,
+    )
+    if df.empty:
+        return pd.DataFrame(columns=["win_last_race", "top3_last_race"])
+    return df.set_index("player_id")
+
