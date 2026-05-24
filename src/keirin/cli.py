@@ -530,6 +530,20 @@ def _write_analyze_html(analysis: dict, out_path: Path) -> None:
     except Exception:
         pass
 
+    # Build participant rows outside the main f-string to avoid nested f-string issues
+    # (Python 3.11 does not support same-delimiter nested f-strings).
+    participant_rows = ""
+    for p in analysis.get("participants", []):
+        rating_s = f"{(p.get('rating') or 0):.1f}"
+        rest_s = f"{int(p['rest_days'])}日" if p.get("rest_days") is not None else "?"
+        t3_s = f"{p['top3_rate_5']:.0%}" if p.get("top3_rate_5") is not None else "?"
+        participant_rows += (
+            f"<tr><td>{p['car_no']}</td><td>{p.get('name', '?')}</td>"
+            f"<td>{p.get('rank_class', '')}</td><td>{rating_s}</td>"
+            f"<td>{rest_s}</td><td>{t3_s}</td>"
+            f"<td>{p.get('style', '')}</td></tr>\n"
+        )
+
     html = f"""<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <title>{analysis.get('date','')} {analysis.get('venue_name','')} {analysis.get('race_no','')}R 分析</title>
@@ -546,12 +560,7 @@ h2{{color:#ffd700;margin-top:2rem}}
 <h2>出走選手</h2>
 <table><tr><th>車</th><th>選手名</th><th>階級</th><th>得点</th><th>休養</th>
 <th>3着内率(5走)</th><th>スタイル</th></tr>
-{''.join(f"""<tr><td>{p['car_no']}</td><td>{p.get('name','?')}</td>
-<td>{p.get('rank_class','')}</td><td>{(p.get('rating') or 0):.1f}</td>
-<td>{int(p['rest_days']) if p.get('rest_days') is not None else '?'}日</td>
-<td>{f"{p['top3_rate_5']:.0%}" if p.get('top3_rate_5') is not None else '?'}</td>
-<td>{p.get('style','')}</td></tr>""" for p in analysis.get('participants', []))}
-</table>
+{participant_rows}</table>
 
 <h2>着順予想</h2>
 <table><tr><th>予測順位</th><th>車</th><th>選手名</th>
