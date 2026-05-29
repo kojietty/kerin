@@ -125,5 +125,6 @@ print(f"sync_player_race_log: +{n} 行")
 # 月次サマリー
 ym = today.strftime("%Y-%m")
 s = month_pnl(eng, ym)
-print(f"\n{ym} 月次: ¥{s['pnl']:+,d}  ROI={s.get('roi') and f\"{s['roi']:.0%}\" or '—'}"
+roi_s = f"{s['roi']:.0%}" if s.get("roi") else "—"
+print(f"\n{ym} 月次: ¥{s['pnl']:+,d}  ROI={roi_s}"
       f"  的中={s['hits']}/{s['bet_count']}")
