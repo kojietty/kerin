@@ -6,6 +6,140 @@ from typing import Any
 
 import click
 
+# ---------------------------------------------------------------------------
+# Daily report HTML (full-day prediction page for GitHub Pages)
+# ---------------------------------------------------------------------------
+
+_DAILY_CSS = """
+body{font-family:'Helvetica Neue',sans-serif;background:#0d0d0d;color:#e0e0e0;margin:0;padding:1rem 1.5rem}
+h1{color:#ffd700;border-bottom:2px solid #333;padding-bottom:.5rem;margin-bottom:1.5rem}
+.meta{color:#888;font-size:.85em;margin-top:-.5rem;margin-bottom:1.5rem}
+.race-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(480px,1fr));gap:1.2rem}
+.race-card{background:#141414;border:1px solid #2a2a2a;border-radius:8px;padding:1rem 1.2rem}
+.race-header{display:flex;align-items:baseline;gap:.6rem;margin-bottom:.8rem}
+.race-title{font-size:1.1em;font-weight:700;color:#ffd700}
+.race-grade{font-size:.8em;color:#aaa;background:#222;padding:.15rem .4rem;border-radius:3px}
+.race-model{font-size:.75em;color:#4caf50;margin-left:auto}
+.rank-table{width:100%;border-collapse:collapse;font-size:.88em}
+.rank-table th{color:#888;font-weight:400;text-align:left;padding:.25rem .4rem;border-bottom:1px solid #2a2a2a}
+.rank-table td{padding:.3rem .4rem;border-bottom:1px solid #1e1e1e}
+.rank-1{color:#ffd700;font-weight:700}
+.rank-2{color:#c0c0c0}
+.rank-3{color:#cd7f32}
+.rank-rest{color:#555}
+.prob-bar{height:8px;background:#222;border-radius:4px;overflow:hidden;margin-top:2px;min-width:60px}
+.prob-fill{height:100%;background:#4caf50;border-radius:4px}
+.lines-section{margin-top:.7rem;font-size:.82em;color:#aaa}
+.lines-label{color:#666;margin-right:.4rem}
+.line-group{display:inline-block;margin-right.8rem;background:#1e1e1e;padding:.15rem .4rem;border-radius:3px}
+.mismatch-warn{color:#ff7043}
+footer{margin-top:2rem;color:#444;font-size:.8em;text-align:center}
+"""
+
+
+def write_daily_report_html(out_path: Path, analyses: list[dict[str, Any]]) -> None:
+    """Write a full-day ranking prediction report HTML from analyze_race() results.
+
+    Produces a responsive card layout — one card per race, each showing the
+    predicted finish order with Plackett-Luce probabilities. No betting content.
+    """
+    if not analyses:
+        date_s = "—"
+    else:
+        date_s = analyses[0].get("date", "—")
+
+    race_cards = "\n".join(_race_card_html(a) for a in analyses)
+    generated = Path(__file__).parent  # just for import; use datetime at call site
+    from datetime import datetime
+    generated_at = datetime.now().strftime("%Y-%m-%d %H:%M JST")
+
+    html = (
+        "<!DOCTYPE html>\n"
+        '<html lang="ja"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        f"<title>競輪着順予想 {date_s}</title>"
+        f"<style>{_DAILY_CSS}</style></head><body>\n"
+        f"<h1>競輪着順予想 {date_s}</h1>\n"
+        f'<p class="meta">生成: {generated_at} &nbsp;|&nbsp; {len(analyses)} レース</p>\n'
+        f'<div class="race-grid">\n{race_cards}\n</div>\n'
+        "<footer>賭けるかどうかはオッズとご自身の判断で</footer>\n"
+        "</body></html>"
+    )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+
+
+def _race_card_html(analysis: dict[str, Any]) -> str:
+    venue = analysis.get("venue_name", "?")
+    race_no = analysis.get("race_no", "?")
+    grade = analysis.get("grade") or ""
+    model_tag = "LambdaRank" if analysis.get("used_ranker") else "PL近似"
+    ranking = analysis.get("ranking", [])
+    lines = analysis.get("lines", [])
+
+    # Ranking rows
+    rows = ""
+    for rank, r in enumerate(ranking, 1):
+        p1 = r.get("pred_prob_1st", 0.0)
+        p2 = r.get("pred_prob_2nd", 0.0)
+        p3 = r.get("pred_prob_3rd", 0.0)
+        name = str(r.get("name") or "?")[:8]
+        cls = str(r.get("rank_class") or "")
+        bar_w = max(2, int(p1 * 100))
+        if rank == 1:
+            tr_cls = "rank-1"
+        elif rank == 2:
+            tr_cls = "rank-2"
+        elif rank == 3:
+            tr_cls = "rank-3"
+        else:
+            tr_cls = "rank-rest"
+        p1_s = f"{p1:.1%}"
+        p2_s = f"{p2:.1%}"
+        p3_s = f"{p3:.1%}"
+        rows += (
+            f'<tr class="{tr_cls}">'
+            f"<td>{rank}</td><td>{r['car_no']}</td>"
+            f"<td>{name}</td><td>{cls}</td>"
+            f"<td>{p1_s}"
+            f'<div class="prob-bar"><div class="prob-fill" style="width:{bar_w}%"></div></div>'
+            f"</td>"
+            f"<td>{p2_s}</td><td>{p3_s}</td>"
+            f"</tr>\n"
+        )
+
+    # Line formation
+    lines_html = ""
+    if lines:
+        parts = []
+        for ln in lines:
+            cars_s = "─".join(str(c) for c in ln.get("cars", []))
+            mm = ln.get("mismatch_score", 0.0) or 0.0
+            warn = ' class="mismatch-warn"' if mm > 3.0 else ""
+            parts.append(f'<span class="line-group"{warn}>{cars_s}</span>')
+        lines_html = (
+            f'<div class="lines-section">'
+            f'<span class="lines-label">ライン:</span>'
+            f'{"&nbsp; ".join(parts)}</div>'
+        )
+
+    return (
+        f'<div class="race-card">\n'
+        f'  <div class="race-header">'
+        f'    <span class="race-title">{venue} {race_no}R</span>'
+        f'    <span class="race-grade">{grade}</span>'
+        f'    <span class="race-model">{model_tag}</span>'
+        f"  </div>\n"
+        f"  <table class=\"rank-table\">\n"
+        f"    <thead><tr><th>#</th><th>車</th><th>選手名</th><th>階級</th>"
+        f"    <th>P(1着)</th><th>P(2着)</th><th>P(3着)</th></tr></thead>\n"
+        f"    <tbody>\n{rows}    </tbody>\n"
+        f"  </table>\n"
+        f"  {lines_html}\n"
+        f"</div>"
+    )
+
 
 def render_analysis_terminal(analysis: dict[str, Any]) -> str:
     """Render the analysis dict as a colorized terminal string using click.style()."""
