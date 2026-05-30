@@ -497,6 +497,47 @@ def accuracy_metrics(
     }
 
 
+def daily_accuracy_metrics(
+    engine: Engine,
+    *,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """Per-day accuracy breakdown from prediction_log (settled rows only)."""
+    from_dt = (from_date or "2020-01-01") + "T00:00:00"
+    to_dt = (to_date or datetime.now().isoformat()[:10]) + "T23:59:59"
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT substr(predicted_at, 1, 10) AS day,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN settled_at IS NOT NULL THEN 1 ELSE 0 END) AS settled,
+                       SUM(COALESCE(rank1_hit, 0)) AS r1_hits,
+                       SUM(COALESCE(top3_hit, 0)) AS t3_hits,
+                       SUM(COALESCE(trifecta_exact_hit, 0)) AS ex_hits
+                FROM prediction_log
+                WHERE predicted_at >= :from_dt AND predicted_at <= :to_dt
+                  AND settled_at IS NOT NULL
+                GROUP BY day ORDER BY day DESC
+            """),
+            {"from_dt": from_dt, "to_dt": to_dt},
+        ).fetchall()
+    result = []
+    for r in rows:
+        settled = int(r[2]) if r[2] else 0
+        if not settled:
+            continue
+        result.append({
+            "date": r[0],
+            "predictions": int(r[1]),
+            "settled": settled,
+            "rank1_rate": round(int(r[3]) / settled, 3),
+            "top3_rate": round(int(r[4]) / settled, 3),
+            "exact_rate": round(int(r[5]) / settled, 3),
+        })
+    return result
+
+
 def recently_fetched(engine: Engine, url: str, within_hours: int = 24) -> bool:
     with engine.begin() as conn:
         row = conn.execute(

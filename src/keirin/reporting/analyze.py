@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import click
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
 
 # ---------------------------------------------------------------------------
 # Daily report HTML (full-day prediction page for GitHub Pages)
@@ -139,6 +142,139 @@ def _race_card_html(analysis: dict[str, Any]) -> str:
         f"  {lines_html}\n"
         f"</div>"
     )
+
+
+_RESULTS_CSS = """
+.results-section{margin-top:2rem;border-top:2px solid #333;padding-top:1.5rem}
+.results-section h2{color:#ffd700;font-size:1.1em;margin-bottom:1rem}
+.accuracy-summary{display:flex;gap:1.5rem;margin-bottom:1.5rem;flex-wrap:wrap}
+.acc-card{background:#141414;border:1px solid #2a2a2a;border-radius:8px;padding:.8rem 1.2rem;min-width:120px;text-align:center}
+.acc-label{font-size:.78em;color:#888;margin-bottom:.3rem}
+.acc-value{font-size:1.4em;font-weight:700}
+.acc-good{color:#4caf50}.acc-ok{color:#ffc107}.acc-bad{color:#f44336}
+.result-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(400px,1fr));gap:1rem}
+.result-card{background:#141414;border:1px solid #2a2a2a;border-radius:8px;padding:.8rem 1rem}
+.result-header{display:flex;align-items:baseline;gap:.5rem;margin-bottom:.5rem}
+.result-title{font-size:1em;font-weight:700;color:#ccc}
+.result-hit{font-size:.8em;padding:.1rem .4rem;border-radius:3px;margin-left:auto}
+.hit-exact{background:#1b5e20;color:#81c784}.hit-top3{background:#1a3a1a;color:#66bb6a}
+.hit-miss{background:#2a1a1a;color:#ef9a9a}
+.result-detail{font-size:.85em;color:#aaa}
+.pred-actual{display:flex;gap:1rem;align-items:center;margin-top:.4rem}
+.pred-label{color:#666;font-size:.8em;min-width:40px}
+.cars-str{font-family:monospace;letter-spacing:.1em}
+.actual-cars{color:#4caf50}
+"""
+
+
+def append_results_to_daily_html(html_path: Path, engine: "Engine", date_iso: str) -> bool:
+    """Inject actual results + per-day accuracy into an existing daily report HTML.
+
+    Reads settled prediction_log rows for *date_iso*, builds a results section,
+    and replaces the closing </body> tag. Returns True if the file was updated.
+    """
+    if not html_path.exists():
+        return False
+
+    from sqlalchemy import text
+
+    with engine.begin() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT pl.race_id,
+                       r.race_no,
+                       v.name AS venue_name,
+                       pl.pred_rank1_car, pl.pred_rank2_car, pl.pred_rank3_car,
+                       pl.actual_rank1_car, pl.actual_rank2_car, pl.actual_rank3_car,
+                       pl.rank1_hit, pl.top3_hit, pl.trifecta_exact_hit
+                FROM prediction_log pl
+                JOIN races r ON pl.race_id = r.race_id
+                LEFT JOIN venues v ON r.venue_id = v.venue_id
+                WHERE substr(pl.predicted_at, 1, 10) = :d
+                  AND pl.settled_at IS NOT NULL
+                ORDER BY pl.race_id
+            """),
+            {"d": date_iso},
+        ).fetchall()
+
+    if not rows:
+        return False
+
+    total = len(rows)
+    r1_hits = sum(1 for r in rows if r[9])
+    t3_hits = sum(1 for r in rows if r[10])
+    ex_hits = sum(1 for r in rows if r[11])
+    r1_rate = r1_hits / total
+    t3_rate = t3_hits / total
+    ex_rate = ex_hits / total
+
+    def _acc_cls(v: float, good: float, ok: float) -> str:
+        return "acc-good" if v >= good else ("acc-ok" if v >= ok else "acc-bad")
+
+    summary_html = (
+        f'<div class="accuracy-summary">'
+        f'<div class="acc-card"><div class="acc-label">決着レース数</div>'
+        f'<div class="acc-value" style="color:#ccc">{total}</div></div>'
+        f'<div class="acc-card"><div class="acc-label">1位的中率</div>'
+        f'<div class="acc-value {_acc_cls(r1_rate,.40,.30)}">{r1_rate:.1%}</div></div>'
+        f'<div class="acc-card"><div class="acc-label">3着内的中率</div>'
+        f'<div class="acc-value {_acc_cls(t3_rate,.60,.45)}">{t3_rate:.1%}</div></div>'
+        f'<div class="acc-card"><div class="acc-label">三連単一致</div>'
+        f'<div class="acc-value {_acc_cls(ex_rate,.15,.10)}">{ex_rate:.1%}</div></div>'
+        f'</div>'
+    )
+
+    race_cards_html = ""
+    for row in rows:
+        race_id, race_no, venue_name = row[0], row[1], row[2] or "?"
+        pred = [row[3], row[4], row[5]]
+        actual = [row[6], row[7], row[8]]
+        r1h, t3h, exh = bool(row[9]), bool(row[10]), bool(row[11])
+
+        if exh:
+            hit_cls, hit_lbl = "hit-exact", "三連単一致"
+        elif t3h:
+            hit_cls, hit_lbl = "hit-top3", "3着内"
+        else:
+            hit_cls, hit_lbl = "hit-miss", "ハズレ"
+
+        pred_str = "→".join(str(c) for c in pred if c)
+        actual_str = "→".join(str(c) for c in actual if c)
+
+        race_cards_html += (
+            f'<div class="result-card">'
+            f'<div class="result-header">'
+            f'<span class="result-title">{venue_name} {race_no}R</span>'
+            f'<span class="result-hit {hit_cls}">{hit_lbl}</span>'
+            f'</div>'
+            f'<div class="result-detail">'
+            f'<div class="pred-actual">'
+            f'<span class="pred-label">予測</span>'
+            f'<span class="cars-str">{pred_str}</span>'
+            f'</div>'
+            f'<div class="pred-actual">'
+            f'<span class="pred-label">結果</span>'
+            f'<span class="cars-str actual-cars">{actual_str}</span>'
+            f'</div>'
+            f'</div>'
+            f'</div>\n'
+        )
+
+    results_section = (
+        f"<style>{_RESULTS_CSS}</style>\n"
+        f'<div class="results-section">\n'
+        f"<h2>本日の的中結果 ({date_iso})</h2>\n"
+        f"{summary_html}\n"
+        f'<div class="result-grid">\n{race_cards_html}</div>\n'
+        f"</div>\n"
+    )
+
+    html = html_path.read_text(encoding="utf-8")
+    if "results-section" in html:
+        return False
+    updated = html.replace("</body>", results_section + "</body>")
+    html_path.write_text(updated, encoding="utf-8")
+    return True
 
 
 def render_analysis_terminal(analysis: dict[str, Any]) -> str:
