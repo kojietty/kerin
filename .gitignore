@@ -7,3 +7,4 @@ data/raw/
 data/interim/
 logs/
 *.tmp
+src/keirin.egg-info/
