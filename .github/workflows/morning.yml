@@ -45,15 +45,14 @@ jobs:
           git diff --cached --quiet || git commit -m "chore: 予想更新 $(date +%Y-%m-%d)"
           git push
 
-      - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
-        with:
-          artifact_name: prediction-pages
-        continue-on-error: true  # Pages 未設定でも落ちない
-
-      # Pages が未設定の場合は docs/ を直接 push で配信
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/
+        continue-on-error: true
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: prediction-pages
         continue-on-error: true

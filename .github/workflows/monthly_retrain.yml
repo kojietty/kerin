@@ -2,8 +2,8 @@ name: 🤖 月次再学習
 
 on:
   schedule:
-    # 毎月1日 8:00 JST = 23:00 UTC (前日)
-    - cron: "0 23 L * *"
+    # 毎月1日 8:00 JST = 23:00 UTC (前月末)
+    - cron: "0 23 1 * *"
   workflow_dispatch:
 
 permissions:
