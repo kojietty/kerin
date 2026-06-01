@@ -196,20 +196,26 @@ def rank_prediction(
         p3[k] += prob
 
     n = len(cars)
-    result = []
+    staging = []
     for c in cars:
         remainder = max(0.0, 1.0 - p1[c] - p2[c] - p3[c])
         avg_rest = (4 + n) / 2 if n > 3 else 4.0
         expected = 1 * p1[c] + 2 * p2[c] + 3 * p3[c] + avg_rest * remainder
-        result.append({
+        display = {
             "car_no": c,
             "pred_prob_1st": round(p1[c], 4),
             "pred_prob_2nd": round(p2[c], 4),
             "pred_prob_3rd": round(p3[c], 4),
             "expected_rank": round(expected, 3),
-        })
+        }
+        # Sort on FULL-precision expected rank, then break ties by descending
+        # 1st/2nd/3rd probability — never by insertion order (which is car_no
+        # ascending and would systematically favour low car numbers).
+        sort_key = (expected, -p1[c], -p2[c], -p3[c], c)
+        staging.append((sort_key, display))
 
-    return sorted(result, key=lambda x: x["expected_rank"])
+    staging.sort(key=lambda t: t[0])
+    return [display for _, display in staging]
 
 
 def analyze_race(

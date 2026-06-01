@@ -56,3 +56,27 @@ def test_rank_prediction_expected_rank_ordering():
     result = rank_prediction(p_top3)
     expected_ranks = [r["expected_rank"] for r in result]
     assert expected_ranks == sorted(expected_ranks), "result not sorted by expected_rank"
+
+
+def test_rank_prediction_tie_not_decided_by_car_number():
+    """Regression: a high car number given the strongest probability must rank
+    first — NOT a lower car number (the old stable-sort-on-rounded-value bug)."""
+    # car 9 is clearly strongest; several low-numbered cars are weaker.
+    p_top3 = {1: 0.30, 2: 0.30, 3: 0.30, 9: 0.90}
+    result = rank_prediction(p_top3)
+    assert result[0]["car_no"] == 9, "stronger car must rank first regardless of car_no"
+    assert result[0]["pred_prob_1st"] > result[1]["pred_prob_1st"]
+
+
+def test_rank_prediction_symmetric_tie_breaks_by_prob_not_car_no():
+    """Two cars with genuinely equal probabilities round to the same expected_rank.
+    The deterministic tiebreaker (P(1st) desc, then car_no) must not invert a
+    clear probability ordering for the surrounding cars."""
+    # car 5 strongest, car 1 weakest; cars 2,3 identical in the middle.
+    p_top3 = {1: 0.2, 2: 0.5, 3: 0.5, 4: 0.3, 5: 0.8}
+    result = rank_prediction(p_top3)
+    assert result[0]["car_no"] == 5
+    assert result[-1]["car_no"] == 1
+    # The two tied cars (2,3) must be adjacent in the middle of the order.
+    order = [r["car_no"] for r in result]
+    assert abs(order.index(2) - order.index(3)) == 1

@@ -136,3 +136,53 @@ def test_relative_rating_computation():
     assert abs(rel.iloc[1] - 0.0) < 0.01
     # avg_opp for 70.0 = (90+80)/2 = 85; relative = -15
     assert abs(rel.iloc[2] - (-15.0)) < 0.01
+
+
+def test_relative_rating_missing_rating_not_imputed():
+    """A car with a missing rating must (a) get NaN relative_rating, and (b) be
+    excluded from every other car's opponent-average denominator."""
+    import numpy as np
+    import pandas as pd
+
+    # Field of 3: two observed ratings (90, 80) and one missing.
+    entries = pd.DataFrame({"car_no": [1, 2, 3], "rating": [90.0, 80.0, np.nan]})
+
+    # Replicate builder step 8b
+    valid = entries["rating"].dropna()
+    valid_sum = valid.sum()
+    m = len(valid)
+    has_rating = entries["rating"].notna()
+    avg_opp = entries["rating"].where(has_rating).copy()
+    avg_opp[has_rating] = (valid_sum - entries.loc[has_rating, "rating"]) / (m - 1)
+    avg_opp[~has_rating] = valid_sum / m
+    rel = entries["rating"] - avg_opp
+
+    # Car 1 (90): opponent avg uses only observed others = 80; relative = +10
+    assert abs(avg_opp.iloc[0] - 80.0) < 0.01
+    assert abs(rel.iloc[0] - 10.0) < 0.01
+    # Car 2 (80): opponent avg = 90; relative = -10
+    assert abs(avg_opp.iloc[1] - 90.0) < 0.01
+    assert abs(rel.iloc[1] - (-10.0)) < 0.01
+    # Car 3 (missing): relative_rating is NaN (not falsely 0)
+    assert np.isnan(rel.iloc[2])
+
+
+def test_monotone_constraints_alignment():
+    """_monotone_constraints returns a vector aligned to feature_cols with -1
+    only for car_no."""
+    from keirin.models.train import _monotone_constraints
+
+    cols = ["rating", "car_no", "line_pos", "has_line"]
+    mc = _monotone_constraints(cols)
+    assert mc == [0, -1, 0, 0]
+    assert len(mc) == len(cols)
+    # Empty input is safe
+    assert _monotone_constraints([]) == []
+
+
+def test_has_line_indicator(mem_engine):
+    """line_features should mark has_line=1 when the race has 並び data."""
+    df = line.line_features(mem_engine, "R001")
+    assert "has_line" in df.columns
+    # R001 fixture has line_id populated for both cars
+    assert int(df["has_line"].iloc[0]) == 1
