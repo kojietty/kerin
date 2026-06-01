@@ -1,0 +1,1117 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>決戦速報 — 2026-06-01</title>
+  <style>/* =============================================================================
+   決戦速報 — Sports Tabloid × Data Terminal
+   ============================================================================= */
+
+@import url("https://fonts.googleapis.com/css2?family=Shippori+Mincho+B1:wght@500;800&family=Manrope:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap");
+
+:root {
+  /* Ink + paper */
+  --ink:           #0a0a0a;
+  --ink-2:         #131313;
+  --ink-3:         #1d1d1d;
+  --paper:         #f5f0e8;
+  --paper-dim:     #a8a39a;
+  --paper-faint:   #5c5751;
+  --hair:          #2a2622;
+
+  /* Keirin official cap colors (1..9) */
+  --c1: #f5f0e8;   /* 白 (light on dark — used inverted) */
+  --c2: #1d1d1d;   /* 黒 */
+  --c3: #d40000;   /* 赤 */
+  --c4: #0a4dbd;   /* 青 */
+  --c5: #f5c518;   /* 黄 */
+  --c6: #1d8348;   /* 緑 */
+  --c7: #e87722;   /* 橙 */
+  --c8: #e91e63;   /* 桃 */
+  --c9: #7b1fa2;   /* 紫 */
+
+  --pos:           #6cd18c;
+  --neg:           #ff5a4a;
+  --warn:          #ffb84a;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 40px;
+  --space-7: 64px;
+
+  --display: "Shippori Mincho B1", "Yu Mincho", "Hiragino Mincho ProN", serif;
+  --body:    "Manrope", "Hiragino Sans", "Yu Gothic", sans-serif;
+  --mono:    "JetBrains Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--body);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Subtle paper grain — pure CSS, GPU-cheap */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.035;
+  z-index: 99;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.85'/></svg>");
+  mix-blend-mode: screen;
+}
+
+.wrap {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5);
+}
+
+/* ---------- Masthead ----------------------------------------------------- */
+
+.masthead {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--hair);
+  margin-bottom: var(--space-5);
+}
+
+.brand {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: clamp(2.2rem, 6vw, 4.2rem);
+  letter-spacing: -0.02em;
+  line-height: 0.95;
+}
+
+.brand .accent {
+  color: var(--c3);
+}
+
+.brand-tagline {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--paper-dim);
+  margin-top: var(--space-2);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.dateline {
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  text-align: right;
+  color: var(--paper-dim);
+}
+
+.dateline strong {
+  display: block;
+  color: var(--paper);
+  font-family: var(--display);
+  font-weight: 500;
+  font-size: 1.6rem;
+  letter-spacing: 0.02em;
+}
+
+/* ---------- PnL header (always visible) --------------------------------- */
+
+.pnl-bar {
+  display: grid;
+  grid-template-columns: 1.2fr repeat(4, 1fr);
+  gap: var(--space-5);
+  padding: var(--space-5);
+  background: var(--ink-2);
+  border: 1px solid var(--hair);
+  margin-bottom: var(--space-5);
+}
+
+.pnl-bar .cell label {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  color: var(--paper-faint);
+  text-transform: uppercase;
+  margin-bottom: var(--space-1);
+}
+
+.pnl-bar .cell .v {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 1.8rem;
+  letter-spacing: -0.02em;
+}
+
+.pnl-bar .cell .mono {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: 1.4rem;
+  letter-spacing: 0.04em;
+}
+
+.pos { color: var(--pos); }
+.neg { color: var(--neg); }
+
+.cumulative .v::before {
+  content: attr(data-prefix);
+}
+
+/* ---------- Summary line ------------------------------------------------- */
+
+.summary {
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  color: var(--paper-dim);
+  margin-bottom: var(--space-5);
+  padding: var(--space-3) 0;
+  border-top: 1px dashed var(--hair);
+  border-bottom: 1px dashed var(--hair);
+  display: flex;
+  gap: var(--space-6);
+  flex-wrap: wrap;
+}
+
+.summary b { color: var(--paper); font-weight: 700; font-family: var(--display); }
+
+/* ---------- Race cards --------------------------------------------------- */
+
+.races {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-5);
+}
+
+.race {
+  display: grid;
+  grid-template-columns: 7fr 5fr;
+  gap: var(--space-5);
+  background: var(--ink-2);
+  border: 1px solid var(--hair);
+  padding: var(--space-5);
+  position: relative;
+  opacity: 0;
+  transform: translateY(12px);
+  animation: race-rise 700ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+
+@keyframes race-rise {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.race::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--c3) 0%, var(--c5) 50%, var(--c4) 100%);
+}
+
+.race-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border-right: 1px dashed var(--hair);
+  padding-right: var(--space-5);
+}
+
+.race-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.race-title .venue {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 2.4rem;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+.race-title .rno {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: 1.4rem;
+  color: var(--c5);
+  letter-spacing: 0.04em;
+}
+
+.race-meta {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  color: var(--paper-dim);
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.race-meta span::before {
+  content: "▎";
+  color: var(--c3);
+  margin-right: 4px;
+}
+
+.line-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.line-block .label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  color: var(--paper-faint);
+  text-transform: uppercase;
+}
+
+.line-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.line-group + .line-group {
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--hair);
+}
+
+.axis {
+  font-family: var(--mono);
+  font-size: 0.92rem;
+  color: var(--paper);
+  margin-top: var(--space-3);
+}
+
+.axis .label {
+  color: var(--paper-faint);
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  display: block;
+  margin-bottom: var(--space-1);
+}
+
+/* ---------- Bib (car number badge) -------------------------------------- */
+
+.bib {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.92rem;
+  border: 1px solid var(--hair);
+  transition: transform 180ms ease;
+}
+
+.bib.lg { width: 38px; height: 38px; font-size: 1.2rem; }
+
+.bib-1 { background: var(--c1); color: var(--ink); }
+.bib-2 { background: var(--c2); color: var(--paper); border-color: var(--paper-faint); }
+.bib-3 { background: var(--c3); color: var(--paper); }
+.bib-4 { background: var(--c4); color: var(--paper); }
+.bib-5 { background: var(--c5); color: var(--ink); }
+.bib-6 { background: var(--c6); color: var(--paper); }
+.bib-7 { background: var(--c7); color: var(--paper); }
+.bib-8 { background: var(--c8); color: var(--paper); }
+.bib-9 { background: var(--c9); color: var(--paper); }
+
+.bib:hover {
+  transform: rotate(-6deg) scale(1.06);
+}
+
+.combo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.combo .sep {
+  font-family: var(--mono);
+  color: var(--paper-faint);
+  font-size: 0.9rem;
+}
+
+/* ---------- Picks table -------------------------------------------------- */
+
+.picks {
+  display: flex;
+  flex-direction: column;
+}
+
+.picks-head {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--paper-faint);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--hair);
+}
+
+.picks-row {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr;
+  align-items: center;
+  padding: var(--space-3) 0;
+  border-bottom: 1px dashed var(--hair);
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  gap: var(--space-2);
+}
+
+.picks-row .num { font-variant-numeric: tabular-nums; }
+.picks-row .odds { color: var(--paper); }
+.picks-row .prob { color: var(--paper-dim); }
+.picks-row .stake { color: var(--c5); font-weight: 600; }
+
+.ev-badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border: 1px solid currentColor;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.ev-1 { color: var(--paper-dim); }
+.ev-2 { color: var(--c5); }
+.ev-3 { color: var(--c3); }
+
+.picks-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: var(--space-3);
+  font-family: var(--mono);
+  color: var(--paper-dim);
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+}
+
+.picks-foot strong {
+  color: var(--paper);
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 1.4rem;
+}
+
+/* ---------- Pass / skip rows -------------------------------------------- */
+
+.skips {
+  margin-top: var(--space-6);
+  border-top: 1px solid var(--hair);
+  padding-top: var(--space-5);
+}
+
+.skips h2 {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 1.8rem;
+  letter-spacing: -0.01em;
+  margin: 0 0 var(--space-3);
+  color: var(--paper-dim);
+}
+
+.skips-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3) var(--space-5);
+}
+
+.skip {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  color: var(--paper-faint);
+  letter-spacing: 0.04em;
+}
+
+.skip .stamp {
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  color: var(--c3);
+  border: 1.5px solid var(--c3);
+  padding: 1px 6px;
+  transform: rotate(-4deg);
+  display: inline-block;
+}
+
+.skip .race-name {
+  color: var(--paper);
+}
+
+.skip .max-ev {
+  margin-left: auto;
+  color: var(--paper-faint);
+}
+
+/* ---------- Footer ------------------------------------------------------- */
+
+footer {
+  margin-top: var(--space-7);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--hair);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  color: var(--paper-faint);
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  text-transform: uppercase;
+}
+
+/* ---------- Emergency stop overlay -------------------------------------- */
+
+.emergency {
+  background: var(--c3);
+  color: var(--paper);
+  padding: var(--space-4) var(--space-5);
+  margin-bottom: var(--space-5);
+  font-family: var(--display);
+  font-weight: 800;
+  font-size: 1.2rem;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  border: 2px solid var(--paper);
+}
+
+.emergency::before {
+  content: "STOP";
+  font-family: var(--mono);
+  font-size: 0.9rem;
+  letter-spacing: 0.3em;
+  background: var(--paper);
+  color: var(--c3);
+  padding: 2px 8px;
+}
+
+/* ---------- Result stamps (post-race) ----------------------------------- */
+
+.hit {
+  font-family: var(--display);
+  font-weight: 800;
+  color: var(--pos);
+  border: 1.5px solid var(--pos);
+  padding: 0 6px;
+  letter-spacing: 0.1em;
+  font-size: 0.8rem;
+}
+
+.miss {
+  font-family: var(--display);
+  color: var(--paper-faint);
+  border: 1.5px solid var(--paper-faint);
+  padding: 0 6px;
+  letter-spacing: 0.1em;
+  font-size: 0.8rem;
+}
+
+/* ---------- Responsive --------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .race { grid-template-columns: 1fr; }
+  .race-head { border-right: none; padding-right: 0; border-bottom: 1px dashed var(--hair); padding-bottom: var(--space-3); }
+  .pnl-bar { grid-template-columns: 1fr 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .race { animation: none; opacity: 1; transform: none; }
+  .bib { transition: none; }
+  .bib:hover { transform: none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div>
+      <div class="brand">決戦速報<span class="accent">.</span></div>
+      <div class="brand-tagline">KEIRIN&nbsp;DAILY&nbsp;BULLETIN&nbsp;/&nbsp;EV&nbsp;FILTERED&nbsp;TRIFECTA</div>
+    </div>
+    <div class="dateline">
+      <strong>2026-06-01</strong>
+      generated 2026-06-01 04:54 JST
+    </div>
+  </header>
+
+
+  <section class="pnl-bar" aria-label="収支">
+    <div class="cell cumulative">
+      <label>月初比 累積 P&L</label>
+      <div class="v pos"
+           data-prefix="+">¥0</div>
+    </div>
+    <div class="cell">
+      <label>月次 回収率</label>
+      <div class="mono neg">
+        —
+      </div>
+    </div>
+    <div class="cell">
+      <label>月次 的中率</label>
+      <div class="mono">—</div>
+    </div>
+    <div class="cell">
+      <label>本日 投資</label>
+      <div class="mono">¥0</div>
+    </div>
+    <div class="cell">
+      <label>残り予算</label>
+      <div class="mono">¥1,000</div>
+    </div>
+  </section>
+
+  <div class="summary">
+    <span>本日開催 <b>92</b> R</span>
+    <span>推奨 <b>0</b> R</span>
+    <span>総点数 <b>0</b></span>
+    <span>本日投資 <b>¥0</b> / 上限 ¥1,000</span>
+  </div>
+
+  <section class="races">
+    <article class="race">
+      <div class="race-head">
+        <div class="race-title"><span class="venue">本日は推奨レースなし</span></div>
+        <div class="race-meta"><span>EV閾値 1.1 を超える買い目が見つかりませんでした</span></div>
+      </div>
+      <div class="picks">
+        <div class="picks-foot"><span>—</span><strong>¥0</strong></div>
+      </div>
+    </article>
+  </section>
+
+  <section class="skips">
+    <h2>見送りレース <span style="font-family: var(--mono); font-size: 0.6em; color: var(--paper-faint); letter-spacing: 0.18em;">92本</span></h2>
+    <div class="skips-grid">
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 1R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 2R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 3R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 4R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 5R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 6R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 7R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 8R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 9R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 10R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">函館 11R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 1R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 2R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 3R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 4R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 5R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 6R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 7R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 8R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 9R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 10R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 11R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">宇都宮 12R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 1R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 2R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 3R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 4R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 5R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 6R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 7R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 8R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 9R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 10R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">松戸 11R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">小田原 1R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">小田原 2R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">小田原 3R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">小田原 4R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">小田原 5R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">小田原 6R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">小田原 7R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">静岡 1R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">静岡 2R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">静岡 3R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">静岡 4R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">静岡 5R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">静岡 6R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">静岡 7R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 1R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 2R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 3R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 4R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 5R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 6R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 7R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 8R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 9R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 10R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 11R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">名古屋 12R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 1R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 2R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 3R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 4R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 5R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 6R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 7R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 8R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 9R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 10R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">和歌山 11R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">岸和田 1R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">岸和田 2R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">岸和田 3R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">岸和田 4R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">岸和田 5R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">岸和田 6R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">岸和田 7R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">高知 1R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">高知 2R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">高知 3R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">高知 4R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">高知 5R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">高知 6R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">高知 7R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">別府 1R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">別府 2R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">別府 3R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">別府 4R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">別府 5R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">別府 6R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+      <div class="skip">
+        <span class="stamp">PASS</span>
+        <span class="race-name">別府 7R</span>
+        <span class="max-ev">max EV —</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div>KEIRIN-PREDICTION-LOCAL · ROI-FOCUSED · TRIFECTA-ONLY</div>
+    <div>This is not a sales tool · Manual purchase required · 賭けすぎ注意</div>
+  </footer>
+
+</div>
+
+<script>
+  // Count-up animation for odds numbers
+  (function () {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const els = document.querySelectorAll("[data-countup]");
+    els.forEach(el => {
+      const target = parseFloat(el.getAttribute("data-countup"));
+      if (!isFinite(target)) return;
+      const dur = 700;
+      const start = performance.now();
+      function tick(now) {
+        const t = Math.min(1, (now - start) / dur);
+        const eased = 1 - Math.pow(1 - t, 3);
+        const cur = (target * eased).toFixed(1);
+        el.textContent = cur;
+        if (t < 1) requestAnimationFrame(tick);
+        else el.textContent = target.toFixed(1);
+      }
+      requestAnimationFrame(tick);
+    });
+  })();
+</script>
+
+</body>
+</html>
