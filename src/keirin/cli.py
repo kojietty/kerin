@@ -10,7 +10,7 @@ import click
 
 from keirin.config import HARD_DAILY_BUDGET_YEN, load_app_config, load_betting_config
 from keirin.db.engine import get_engine, init_db
-from keirin.db.repository import accuracy_metrics, log_prediction, month_pnl, settle_bets_for_race, settle_prediction_log
+from keirin.db.repository import accuracy_metrics, daily_accuracy_metrics, log_prediction, month_pnl, settle_bets_for_race, settle_prediction_log
 from keirin.logging_setup import setup_logging
 from keirin.reporting.html_renderer import example_payload, write_dashboard
 from keirin.reporting.markdown import write_markdown
@@ -530,6 +530,20 @@ def _write_analyze_html(analysis: dict, out_path: Path) -> None:
     except Exception:
         pass
 
+    # Build participant rows outside the main f-string to avoid nested f-string issues
+    # (Python 3.11 does not support same-delimiter nested f-strings).
+    participant_rows = ""
+    for p in analysis.get("participants", []):
+        rating_s = f"{(p.get('rating') or 0):.1f}"
+        rest_s = f"{int(p['rest_days'])}日" if p.get("rest_days") is not None else "?"
+        t3_s = f"{p['top3_rate_5']:.0%}" if p.get("top3_rate_5") is not None else "?"
+        participant_rows += (
+            f"<tr><td>{p['car_no']}</td><td>{p.get('name', '?')}</td>"
+            f"<td>{p.get('rank_class', '')}</td><td>{rating_s}</td>"
+            f"<td>{rest_s}</td><td>{t3_s}</td>"
+            f"<td>{p.get('style', '')}</td></tr>\n"
+        )
+
     html = f"""<!DOCTYPE html>
 <html lang="ja"><head><meta charset="utf-8">
 <title>{analysis.get('date','')} {analysis.get('venue_name','')} {analysis.get('race_no','')}R 分析</title>
@@ -546,12 +560,7 @@ h2{{color:#ffd700;margin-top:2rem}}
 <h2>出走選手</h2>
 <table><tr><th>車</th><th>選手名</th><th>階級</th><th>得点</th><th>休養</th>
 <th>3着内率(5走)</th><th>スタイル</th></tr>
-{''.join(f"""<tr><td>{p['car_no']}</td><td>{p.get('name','?')}</td>
-<td>{p.get('rank_class','')}</td><td>{(p.get('rating') or 0):.1f}</td>
-<td>{int(p['rest_days']) if p.get('rest_days') is not None else '?'}日</td>
-<td>{f"{p['top3_rate_5']:.0%}" if p.get('top3_rate_5') is not None else '?'}</td>
-<td>{p.get('style','')}</td></tr>""" for p in analysis.get('participants', []))}
-</table>
+{participant_rows}</table>
 
 <h2>着順予想</h2>
 <table><tr><th>予測順位</th><th>車</th><th>選手名</th>
@@ -576,7 +585,10 @@ h2{{color:#ffd700;margin-top:2rem}}
 @click.option("--from", "from_s", default=None, help="YYYY-MM-DD (省略時: 30日前)")
 @click.option("--to", "to_s", default=None, help="YYYY-MM-DD (省略時: 今日)")
 @click.option("--model", "model_v", default=None, help="モデルバージョンでフィルタ")
-def metrics_cmd(from_s: str | None, to_s: str | None, model_v: str | None) -> None:
+@click.option("--daily", "show_daily", is_flag=True, default=False, help="日別詳細を表示")
+def metrics_cmd(
+    from_s: str | None, to_s: str | None, model_v: str | None, show_daily: bool
+) -> None:
     """予測精度レポート: 1位的中率・3着内的中率・三連単完全一致率の推移。"""
     from datetime import date as _dt, timedelta
 
@@ -591,7 +603,7 @@ def metrics_cmd(from_s: str | None, to_s: str | None, model_v: str | None) -> No
 
     click.echo(f"\n== 予測精度レポート ==")
     click.echo(f"期間: {from_date} 〜 {to_date}" + (f"  モデル: {model_v}" if model_v else ""))
-    click.echo(f"─" * 50)
+    click.echo("─" * 50)
     click.echo(f"総予測数   : {m['total_predictions']}")
     click.echo(f"決着済み   : {m['settled']}")
 
@@ -609,7 +621,25 @@ def metrics_cmd(from_s: str | None, to_s: str | None, model_v: str | None) -> No
     click.echo(f"3着内的中率: {click.style(_fmt(t3), fg=t3_color)}  (目標: 55-65%)")
     click.echo(f"三連単一致 : {_fmt(ex)}  (目標: 10-20%)")
 
-    if m["monthly"]:
+    if show_daily:
+        days = daily_accuracy_metrics(engine, from_date=from_date, to_date=to_date)
+        if days:
+            click.echo(f"\n日別的中率:")
+            click.echo(f"  {'日付':>10}  {'レース数':>6}  {'1位':>6}  {'3着内':>6}  {'三連単':>6}")
+            click.echo("  " + "─" * 46)
+            for d in days:
+                r1d = d["rank1_rate"]
+                t3d = d["top3_rate"]
+                exd = d["exact_rate"]
+                r1d_color = "green" if r1d >= 0.40 else ("yellow" if r1d >= 0.30 else "red")
+                click.echo(
+                    f"  {d['date']:>10}  {d['settled']:>6}"
+                    f"  {click.style(_fmt(r1d), fg=r1d_color):>6}"
+                    f"  {_fmt(t3d):>6}  {_fmt(exd):>6}"
+                )
+        else:
+            click.echo("\n日別データなし (決着済み予測がありません)")
+    elif m["monthly"]:
         click.echo(f"\n月別推移:")
         for row in m["monthly"]:
             r1r = row.get("rank1_rate")

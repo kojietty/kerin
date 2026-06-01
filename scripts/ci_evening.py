@@ -16,8 +16,9 @@ from sqlalchemy import text
 
 from keirin.config import load_app_config
 from keirin.db.engine import get_engine, init_db
-from keirin.db.repository import sync_player_race_log, month_pnl
+from keirin.db.repository import sync_player_race_log, month_pnl, settle_prediction_log
 from keirin.data.import_cache import VENUE_TABLE
+from keirin.reporting.analyze import append_results_to_daily_html
 
 cfg = load_app_config()
 eng = get_engine(cfg.paths.db)
@@ -118,6 +119,18 @@ for rid in race_ids:
 
 print(f"\n保存: {saved}/{len(race_ids)} レース")
 
+# prediction_log 決着処理 + HTML 更新
+settled_preds = 0
+for rid in race_ids:
+    settled_preds += settle_prediction_log(eng, rid)
+print(f"prediction_log 決着: {settled_preds} 件")
+
+html_path = Path("docs") / f"{today.isoformat()}.html"
+if append_results_to_daily_html(html_path, eng, today.isoformat()):
+    print(f"HTML更新: {html_path} (的中結果追加)")
+else:
+    print(f"HTML更新スキップ (決着済み予測なし、またはファイル未存在)")
+
 # player_race_log 更新
 n = sync_player_race_log(eng)
 print(f"sync_player_race_log: +{n} 行")
@@ -125,5 +138,6 @@ print(f"sync_player_race_log: +{n} 行")
 # 月次サマリー
 ym = today.strftime("%Y-%m")
 s = month_pnl(eng, ym)
-print(f"\n{ym} 月次: ¥{s['pnl']:+,d}  ROI={s.get('roi') and f\"{s['roi']:.0%}\" or '—'}"
+roi_s = f"{s['roi']:.0%}" if s.get("roi") else "—"
+print(f"\n{ym} 月次: ¥{s['pnl']:+,d}  ROI={roi_s}"
       f"  的中={s['hits']}/{s['bet_count']}")

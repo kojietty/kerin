@@ -1,9 +1,9 @@
 """
 GitHub Actions 朝ジョブ (9:00 JST):
   1. 会場スキャン + 出走表取得 (login不要)
-  2. オッズ取得 (NETKEIRIN_COOKIE が設定されていれば)
-  3. LightGBM 予想生成
-  4. HTML/MD を docs/ に出力 → GitHub Pages で公開
+  2. オッズ取得 (NETKEIRIN_COOKIE が設定されていれば・予測精度向上のみ)
+  3. 全レース着順予想 (analyze_race)
+  4. HTML を docs/ に出力 → GitHub Pages で公開
 """
 from __future__ import annotations
 import sys, io, os, re, time, json, requests
@@ -15,32 +15,26 @@ from datetime import date, datetime
 from pathlib import Path
 from sqlalchemy import text
 
-from keirin.config import load_app_config, load_betting_config
-from keirin.config import HARD_DAILY_BUDGET_YEN, HARD_EMERGENCY_STOP_YEN
+from keirin.config import load_app_config
 from keirin.db.engine import get_engine, init_db
-from keirin.db.repository import upsert_race, upsert_entries, insert_odds_snapshot, month_pnl
+from keirin.db.repository import upsert_race, upsert_entries, insert_odds_snapshot, log_prediction
 from keirin.scraper.netkeirin import (
     entry_url, odds_url, parse_entries, parse_line_assignments, parse_trifecta_odds
 )
 from keirin.data.import_cache import VENUE_TABLE
-from keirin.models.train import load_latest_model
-from keirin.models.combo import expand_trifecta
-from keirin.models.predict import predict_race
+from keirin.models.train import load_latest_model, load_latest_ranker
+from keirin.models.predict import analyze_race
 from keirin.features.builder import build_race_features
-from keirin.betting.ev import build_candidates
-from keirin.betting.selector import select_picks
-from keirin.betting.stake import plan_stakes
-from keirin.reporting.html_renderer import write_dashboard
-from keirin.reporting.markdown import write_markdown
+from keirin.reporting.analyze import write_daily_report_html
 
 cfg = load_app_config()
-bcfg = load_betting_config()
 eng = get_engine(cfg.paths.db)
 init_db(eng)
 today = date.today()
 TODAY_STR = today.strftime("%Y%m%d")
 
 # Cookie 認証 (GitHub Secret: NETKEIRIN_COOKIE)
+# オッズは賭け用ではなく、乖離特徴量による予測精度向上のために使用
 COOKIE = os.environ.get("NETKEIRIN_COOKIE", "")
 HEADERS = {
     "User-Agent": "KeirinResearchBot/0.1 (personal; pagudaruma@gmail.com)",
@@ -48,7 +42,7 @@ HEADERS = {
 }
 if COOKIE:
     HEADERS["Cookie"] = COOKIE
-    print("[auth] Cookie設定済み (odds取得可)")
+    print("[auth] Cookie設定済み (オッズ取得→乖離特徴量で精度向上)")
 else:
     print("[auth] Cookie未設定 (出走表+予想のみ)")
 
@@ -130,7 +124,6 @@ for vc in active_venues:
             "race_no": rno, "grade": grade, "race_class": None,
             "distance_m": None, "weather": None, "track_cond": None, "post_time": None,
         })
-        # Players first (FK)
         with eng.begin() as conn:
             for e in enriched:
                 if not e.get("player_id"):
@@ -156,10 +149,10 @@ for vc in active_venues:
 
 print(f"出走表: {len(all_race_ids)} レース")
 
-# ── 3. オッズ取得 ─────────────────────────────────────────────────────────────
+# ── 3. オッズ取得 (乖離特徴量用・賭け推奨には使わない) ─────────────────────
 live_odds: dict[str, dict] = {}
 if COOKIE:
-    print("オッズ取得中...")
+    print("オッズ取得中 (予測精度向上のため)...")
     snap = datetime.now().isoformat(timespec="seconds")
     for rid in all_race_ids:
         html = _get(odds_url(rid))
@@ -172,96 +165,75 @@ if COOKIE:
             live_odds[rid] = dict(combos)
     print(f"オッズ: {len(live_odds)} レース分取得")
 
-# ── 4. 予想生成 ───────────────────────────────────────────────────────────────
+# ── 4. 全レース着順予想 ───────────────────────────────────────────────────────
 bundle = load_latest_model(cfg.paths.models)
 if not bundle:
     print("モデルなし → python -m keirin retrain を先に実行してください")
     sys.exit(1)
 
 model, feature_cols, calibrator = bundle
-ym = today.strftime("%Y-%m")
-pnl_data = month_pnl(eng, ym)
-mtd_pnl = pnl_data["pnl"]
+ranker_bundle = load_latest_ranker(cfg.paths.models)
+ranker, ranker_features = ranker_bundle if ranker_bundle else (None, None)
+model_files = sorted(cfg.paths.models.glob("lgbm_top3_*.pkl"))
+model_version = model_files[-1].stem if model_files else "unknown"
 
-recommended: list[dict] = []
-skipped: list[dict] = []
+if ranker:
+    print(f"モデル: {model_version} + LambdaRank")
+else:
+    print(f"モデル: {model_version} (LambdaRankなし → PL近似)")
 
+analyses: list[dict] = []
 for rid in all_race_ids:
     vc = int(rid[8:10])
     rno = int(rid[10:12])
     venue_name = VENUE_TABLE.get(f"{vc:02d}", ("?", 400))[0]
-    odds = live_odds.get(rid)
-    df = build_race_features(eng, rid, ref_date=today.isoformat(), latest_odds=odds)
+    df = build_race_features(eng, rid, ref_date=today.isoformat(),
+                             latest_odds=live_odds.get(rid))
     if df.empty:
+        print(f"  {venue_name} {rno}R: 特徴量なし (スキップ)")
         continue
-    p_top3 = predict_race(df, model, feature_cols, calibrator)
-    if not p_top3:
-        continue
-    combo_probs = expand_trifecta(p_top3, method=bcfg.combo_method)
 
-    with eng.begin() as conn:
-        row = conn.execute(text("SELECT grade FROM races WHERE race_id=:r"), {"r": rid}).fetchone()
-    grade = row[0] if row else None
+    analysis = analyze_race(
+        eng, rid, df, model, feature_cols, calibrator,
+        ranker=ranker, ranker_features=ranker_features,
+        model_version=model_version,
+    )
+    analyses.append(analysis)
 
-    if odds:
-        candidates = build_candidates(combo_probs, odds)
-        result = select_picks(candidates, bcfg)
-        plan = plan_stakes(result.picks, bcfg, month_to_date_pnl_yen=mtd_pnl)
-        if result.skipped:
-            skipped.append({"venue_name": venue_name, "race_no": rno, "max_ev": result.max_ev})
-        else:
-            picks_out = [{
-                "cars": [int(x) for x in p.pick.combo.split("-")],
-                "odds": p.pick.odds, "prob": p.pick.prob, "ev": p.pick.ev,
-                "stake_yen": p.stake_yen if not plan.emergency_stop_triggered else 0,
-                "hit": None,
-            } for p in plan.assignments]
-            best = max(p_top3, key=p_top3.get)
-            recommended.append({
-                "venue_name": venue_name, "race_no": rno, "grade": grade,
-                "race_class": None, "post_time": None,
-                "distance_m": VENUE_TABLE.get(f"{vc:02d}", ("?", 400))[1],
-                "weather": None, "lines": [],
-                "axis": {"car_no": best, "name": "?", "note": f"p={p_top3[best]:.1%}"},
-                "picks": picks_out, "max_ev": result.max_ev, "total_stake": plan.total_yen,
-            })
-    else:
-        top3 = sorted(combo_probs.items(), key=lambda x: -x[1])[:3]
-        skipped.append({"venue_name": venue_name, "race_no": rno, "max_ev": None, "top_combos": top3})
+    ranking = analysis.get("ranking", [])
+    top3_str = "→".join(str(r["car_no"]) for r in ranking[:3])
+    model_tag = "LR" if analysis.get("used_ranker") else "PL"
+    print(f"  {venue_name} {rno}R [{model_tag}]: 予測 {top3_str}")
 
-# ── 5. ダッシュボード出力 → docs/ ─────────────────────────────────────────────
-daily_invest = sum(sum(p["stake_yen"] for p in r["picks"]) for r in recommended)
-payload = {
-    "date_label": today.isoformat(),
-    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M JST"),
-    "mtd_pnl": mtd_pnl, "mtd_roi": pnl_data.get("roi"),
-    "mtd_hit_rate": pnl_data.get("hit_rate"),
-    "daily_invest": daily_invest,
-    "daily_remaining": HARD_DAILY_BUDGET_YEN - daily_invest,
-    "daily_cap": HARD_DAILY_BUDGET_YEN,
-    "total_races": len(all_race_ids),
-    "ev_threshold": bcfg.ev_threshold,
-    "emergency_stop": mtd_pnl <= HARD_EMERGENCY_STOP_YEN,
-    "recommended": recommended,
-    "skipped": skipped,
-}
+    # 予測ログ記録 (record-result 後に精度追跡)
+    if len(ranking) >= 3:
+        try:
+            log_prediction(
+                eng, race_id=rid,
+                pred_rank1_car=ranking[0]["car_no"],
+                pred_rank2_car=ranking[1]["car_no"],
+                pred_rank3_car=ranking[2]["car_no"],
+                pred_rank1_prob=ranking[0]["pred_prob_1st"],
+                pred_rank2_prob=ranking[1]["pred_prob_2nd"],
+                pred_rank3_prob=ranking[2]["pred_prob_3rd"],
+                model_version=model_version,
+            )
+        except Exception:
+            pass
 
+# ── 5. HTML 出力 → docs/ ─────────────────────────────────────────────────────
 docs = Path("docs")
 docs.mkdir(exist_ok=True)
 out_html = docs / f"{today.isoformat()}.html"
-write_dashboard(out_html, payload)
-write_markdown(
-    cfg.paths.reports / "predictions" / f"{today.isoformat()}.md",
-    payload
-)
+write_daily_report_html(out_html, analyses)
 
-# index.html = 最新予想へリダイレクト
 (docs / "index.html").write_text(
     f'<!DOCTYPE html><meta charset="utf-8">'
     f'<meta http-equiv="refresh" content="0;url={today.isoformat()}.html">'
-    f'<title>競輪予想 {today}</title>',
+    f'<title>競輪着順予想 {today}</title>',
     encoding="utf-8",
 )
 
-print(f"\n完了: 推奨={len(recommended)}R  見送り={len(skipped)}R  投資=¥{daily_invest:,}")
+print(f"\n完了: {len(analyses)} レース予想生成")
 print(f"HTML: {out_html}")
+
