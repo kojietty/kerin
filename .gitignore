@@ -8,3 +8,5 @@ data/interim/
 logs/
 *.tmp
 src/keirin.egg-info/
+data/*.db-shm
+data/*.db-wal

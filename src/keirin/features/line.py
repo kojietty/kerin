@@ -67,6 +67,11 @@ def line_features(engine: Engine, race_id: str) -> pd.DataFrame:
     entries["line_len"] = entries["line_len"].fillna(1).astype(int)
     entries["rating_vs_leader_gap"] = entries["rating"] - entries["leader_rating"].fillna(entries["rating"])
 
+    # has_line distinguishes "this race has 並び data" from "everyone is solo".
+    # Without it, the 97.5% of historical rows lacking line data look identical
+    # to genuine solo riders, so LightGBM never learns to use the line columns.
+    entries["has_line"] = int(entries["line_id"].notna().any())
+
     return entries.set_index(["race_id", "car_no"])
 
 

@@ -38,7 +38,7 @@ FEATURE_COLUMNS = [
     "top3_333", "top3_400", "top3_500",
     # --- Line structure ---
     "line_pos", "line_len", "is_leader", "is_follower", "is_solo",
-    "rating_vs_leader_gap",
+    "rating_vs_leader_gap", "has_line",
     # --- Gear ---
     "gear_ratio", "gear_z", "gear_rank", "gear_above_field",
     # --- Race context ---
@@ -88,6 +88,7 @@ def build_race_features(
                 JOIN races r ON e.race_id = r.race_id
                 LEFT JOIN venues v ON r.venue_id = v.venue_id
                 WHERE e.race_id = :race_id
+                ORDER BY e.car_no
                 """
             ),
             conn,
@@ -189,12 +190,29 @@ def build_race_features(
             entries = entries.join(frame, how="left")
     entries = entries.reset_index().rename(columns={"index": "car_no"})
 
+    # If no line frame was joined at all, this race has no 並び data.
+    if "has_line" not in entries.columns:
+        entries["has_line"] = 0
+    else:
+        entries["has_line"] = entries["has_line"].fillna(0).astype(int)
+
     # --- 8b. Field-relative rating (computed from entries, no SQL needed) ------
+    # Use ONLY observed ratings for the field statistics. A car with a missing
+    # rating must not be imputed to the field mean (that would distort both its
+    # own relative_rating and every opponent's denominator). Its relative_rating
+    # is left NaN — LightGBM handles NaN natively.
     if "rating" in entries.columns and entries["rating"].notna().sum() > 1:
-        filled = entries["rating"].fillna(entries["rating"].mean())
-        n = len(filled)
-        entries["avg_opponent_rating"] = (filled.sum() - filled) / (n - 1)
-        entries["relative_rating"] = entries["rating"] - entries["avg_opponent_rating"]
+        valid = entries["rating"].dropna()
+        valid_sum = valid.sum()
+        m = len(valid)
+        has_rating = entries["rating"].notna()
+        # Cars with a rating: average of the OTHER observed ratings (exclude self).
+        # Cars without a rating: average of all observed ratings (nothing to exclude).
+        avg_opp = entries["rating"].where(has_rating).copy()
+        avg_opp[has_rating] = (valid_sum - entries.loc[has_rating, "rating"]) / (m - 1)
+        avg_opp[~has_rating] = valid_sum / m
+        entries["avg_opponent_rating"] = avg_opp
+        entries["relative_rating"] = entries["rating"] - avg_opp
     else:
         entries["avg_opponent_rating"] = float("nan")
         entries["relative_rating"] = float("nan")

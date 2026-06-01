@@ -39,7 +39,7 @@ TRAIN_FEATURES = [
     "top3_333", "top3_400", "top3_500",
     # Line (mostly NaN in imported data, but useful once scraped)
     "line_pos", "line_len", "is_leader", "is_follower", "is_solo",
-    "rating_vs_leader_gap",
+    "rating_vs_leader_gap", "has_line",
     # Gear
     "gear_ratio", "gear_z", "gear_rank", "gear_above_field",
     # Race context
@@ -49,6 +49,21 @@ TRAIN_FEATURES = [
     "h2h_win_rate", "h2h_top3_rate", "h2h_n_encounters",
     "grade_top3_rate",
 ]
+
+
+# Features whose effect on top-3 propensity we constrain to be monotonic, to stop
+# the model carving overfit, non-monotone splits on raw car number. car_no gets -1
+# (lower car number → higher top-3 propensity, matching the true base-rate gradient:
+# car 1 wins ~26%). This preserves the legitimate positional signal while capping
+# the model's over-reliance on car_no as a proxy for line position.
+_MONOTONE_BY_FEATURE: dict[str, int] = {
+    "car_no": -1,
+}
+
+
+def _monotone_constraints(feature_cols: list[str]) -> list[int]:
+    """Return a monotone_constraints vector aligned to feature_cols (0 = none)."""
+    return [_MONOTONE_BY_FEATURE.get(c, 0) for c in feature_cols]
 
 
 def train_model(
@@ -90,6 +105,7 @@ def train_model(
         "verbose": -1,
         "n_jobs": -1,
         "random_state": 42,
+        "monotone_constraints": _monotone_constraints(feature_cols),
     }
 
     model = lgb.LGBMClassifier(**params)
@@ -330,6 +346,7 @@ def train_ranker(
         "n_jobs": -1,
         "random_state": 42,
         "label_gain": list(range(11)),
+        "monotone_constraints": _monotone_constraints(feature_cols),
     }
 
     ranker = lgb.LGBMRanker(**params)
