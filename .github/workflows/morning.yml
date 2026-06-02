@@ -2,8 +2,6 @@ name: 🏁 競輪予想 (朝)
 
 on:
   schedule:
-    # 目標 9:00 JST。GitHub Actions は混雑時に~4時間遅延するため
-    # 5:00 JST (20:00 UTC 前日) にトリガーし、遅延後 9:00 JST 前後に実行させる
     - cron: "0 20 * * *"
   workflow_dispatch:  # 手動実行ボタン
 
