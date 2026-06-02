@@ -16,6 +16,8 @@ jobs:
   predict:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout
@@ -50,6 +52,7 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/
+          name: prediction-pages
         continue-on-error: true
 
       - name: Deploy to GitHub Pages
