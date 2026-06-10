@@ -68,14 +68,21 @@ def upsert_entries(engine: Engine, race_id: str, entries: Iterable[dict[str, Any
     for row in rows:
         row.setdefault("race_id", race_id)
         row.setdefault("scratched", 0)
+        for opt in ("nige_cnt", "makuri_cnt", "sashi_cnt", "mark_cnt",
+                    "s_count", "b_count", "line_raw"):
+            row.setdefault(opt, None)
     with engine.begin() as conn:
         conn.execute(
             text(
                 """
                 INSERT INTO entries (race_id, car_no, player_id, rank_class, rating,
-                                     gear_ratio, line_id, line_pos, style, scratched)
+                                     gear_ratio, line_id, line_pos, style, scratched,
+                                     nige_cnt, makuri_cnt, sashi_cnt, mark_cnt,
+                                     s_count, b_count, line_raw)
                 VALUES (:race_id, :car_no, :player_id, :rank_class, :rating,
-                        :gear_ratio, :line_id, :line_pos, :style, :scratched)
+                        :gear_ratio, :line_id, :line_pos, :style, :scratched,
+                        :nige_cnt, :makuri_cnt, :sashi_cnt, :mark_cnt,
+                        :s_count, :b_count, :line_raw)
                 ON CONFLICT(race_id, car_no) DO UPDATE SET
                   player_id  = excluded.player_id,
                   rank_class = excluded.rank_class,
@@ -84,7 +91,14 @@ def upsert_entries(engine: Engine, race_id: str, entries: Iterable[dict[str, Any
                   line_id    = excluded.line_id,
                   line_pos   = excluded.line_pos,
                   style      = excluded.style,
-                  scratched  = excluded.scratched
+                  scratched  = excluded.scratched,
+                  nige_cnt   = COALESCE(excluded.nige_cnt,   entries.nige_cnt),
+                  makuri_cnt = COALESCE(excluded.makuri_cnt, entries.makuri_cnt),
+                  sashi_cnt  = COALESCE(excluded.sashi_cnt,  entries.sashi_cnt),
+                  mark_cnt   = COALESCE(excluded.mark_cnt,   entries.mark_cnt),
+                  s_count    = COALESCE(excluded.s_count,    entries.s_count),
+                  b_count    = COALESCE(excluded.b_count,    entries.b_count),
+                  line_raw   = COALESCE(excluded.line_raw,   entries.line_raw)
                 """
             ),
             rows,
@@ -128,12 +142,19 @@ def insert_results(engine: Engine, race_id: str, results: Iterable[dict[str, Any
     rows = [{**r, "race_id": race_id} for r in results]
     if not rows:
         return
+    for row in rows:
+        row.setdefault("kimarite", None)
+        row.setdefault("time_sec", None)
     with engine.begin() as conn:
         conn.execute(
             text(
                 """
-                INSERT OR IGNORE INTO results (race_id, car_no, finish, kimarite, time_sec)
+                INSERT INTO results (race_id, car_no, finish, kimarite, time_sec)
                 VALUES (:race_id, :car_no, :finish, :kimarite, :time_sec)
+                ON CONFLICT(race_id, car_no) DO UPDATE SET
+                  finish   = COALESCE(excluded.finish,   results.finish),
+                  kimarite = COALESCE(excluded.kimarite, results.kimarite),
+                  time_sec = COALESCE(excluded.time_sec, results.time_sec)
                 """
             ),
             rows,
@@ -153,6 +174,33 @@ def insert_payouts(engine: Engine, race_id: str, payouts: Iterable[dict[str, Any
                 """
             ),
             rows,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Simulation feature cache
+# ---------------------------------------------------------------------------
+
+def upsert_sim_features(engine: Engine, race_id: str, rows: Iterable[dict[str, Any]]) -> None:
+    """rows: [{car_no, p_sim_win, p_sim_top3, p_front, sim_version}]"""
+    payload = [{**r, "race_id": race_id} for r in rows]
+    if not payload:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO sim_features (race_id, car_no, p_sim_win, p_sim_top3,
+                                          p_front, sim_version)
+                VALUES (:race_id, :car_no, :p_sim_win, :p_sim_top3, :p_front, :sim_version)
+                ON CONFLICT(race_id, car_no) DO UPDATE SET
+                  p_sim_win   = excluded.p_sim_win,
+                  p_sim_top3  = excluded.p_sim_top3,
+                  p_front     = excluded.p_front,
+                  sim_version = excluded.sim_version
+                """
+            ),
+            payload,
         )
 
 
@@ -264,18 +312,29 @@ def month_pnl(engine: Engine, year_month: str) -> dict[str, Any]:
 # Fetch log
 # ---------------------------------------------------------------------------
 
+# Sentinel finish for "raced but placed outside the recorded top-3" (着外).
+# When a race has results rows but a non-scratched entry has none, that entry
+# logically finished 4th or worse. 9 keeps rolling stats meaningful (top3_rate,
+# avg_finish) until full finishing orders are backfilled, at which point real
+# values overwrite the sentinel via the COALESCE upsert below.
+OUTSIDE_FINISH_SENTINEL = 9
+
+
 def sync_player_race_log(engine: Engine) -> int:
     """Populate player_race_log by joining entries + results + races.
 
     This derives the per-player history table from data already in the DB.
     Run after every `record-result` cycle to keep player_race_log current.
-    Returns the number of rows inserted.
+    Uses an upsert so finish/kimarite recorded after the first sync still
+    propagate, then derives 着外 (finish=9) for non-scratched entries in
+    races that have results but no row for that car.
+    Returns the number of rows inserted or updated.
     """
     with engine.begin() as conn:
         result = conn.execute(
             text(
                 """
-                INSERT OR IGNORE INTO player_race_log
+                INSERT INTO player_race_log
                   (player_id, race_id, race_date, venue_id, grade, race_class,
                    bank_length, car_no, finish, kimarite, time_sec, line_pos, scratched)
                 SELECT
@@ -298,10 +357,29 @@ def sync_player_race_log(engine: Engine) -> int:
                 LEFT JOIN results res ON e.race_id = res.race_id AND e.car_no = res.car_no
                 WHERE e.player_id IS NOT NULL
                   AND r.date IS NOT NULL
+                ON CONFLICT(player_id, race_id) DO UPDATE SET
+                  finish    = COALESCE(excluded.finish,   player_race_log.finish),
+                  kimarite  = COALESCE(excluded.kimarite, player_race_log.kimarite),
+                  time_sec  = COALESCE(excluded.time_sec, player_race_log.time_sec),
+                  line_pos  = COALESCE(excluded.line_pos, player_race_log.line_pos),
+                  scratched = excluded.scratched
                 """
             )
         )
-        return result.rowcount
+        n = result.rowcount
+        # 着外導出: race has results, this car raced (not scratched) but has no
+        # result row → finished outside the recorded placings.
+        conn.execute(
+            text(
+                """
+                UPDATE player_race_log SET finish = :sentinel
+                WHERE finish IS NULL AND scratched = 0
+                  AND race_id IN (SELECT DISTINCT race_id FROM results)
+                """
+            ),
+            {"sentinel": OUTSIDE_FINISH_SENTINEL},
+        )
+        return n
 
 
 def log_fetch(engine: Engine, url: str, status: int, bytes_: int) -> None:

@@ -15,6 +15,37 @@ from keirin.scraper.rate_limiter import DailyRequestCap, RateLimiter, RobotsCach
 
 log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Lightweight fetch helpers (shared by ci_morning / ci_evening / backfill_*)
+#
+# 旧スクリプトの _get() は apparent_encoding が windows-1252 を返すと cp932 を
+# 強制し、UTF-8 ページを誤デコードして style 等を文字化けさせていた
+# (騾�/霑ｽ/荳｡)。ここでは「UTF-8 を厳密に試す → 失敗時のみ cp932 → euc-jp」の
+# 決定的な判定にする。UTF-8 は厳密デコードなので cp932 ページを誤って通すことは
+# 実質ない。
+# ---------------------------------------------------------------------------
+
+_DECODE_CANDIDATES = ("utf-8", "cp932", "euc-jp")
+
+
+def decode_bytes(content: bytes) -> str:
+    for enc in _DECODE_CANDIDATES:
+        try:
+            return content.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return content.decode("utf-8", errors="replace")
+
+
+def fetch_text(url: str, *, headers: dict | None = None, timeout: int = 20) -> str:
+    """GET url and return decoded text ("" on failure)."""
+    try:
+        r = requests.get(url, headers=headers or {}, timeout=timeout)
+        return decode_bytes(r.content)
+    except Exception as e:  # network errors, timeouts
+        log.warning("fetch_text failed %s: %s", url[:60], e)
+        return ""
+
 
 class FetchBlocked(RuntimeError):
     """Raised when robots.txt or our own policy disallows a URL."""

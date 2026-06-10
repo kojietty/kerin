@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from keirin.features import gear, line, matchup, odds_divergence, player_form, venue
+from keirin.features.style_matchup import STYLE_CONTEXT_COLUMNS, race_style_context
 
 log = logging.getLogger(__name__)
 
@@ -33,12 +34,16 @@ FEATURE_COLUMNS = [
     # --- Kimarite style ---
     "km_nige", "km_maki", "km_sashi", "km_mark",
     # --- Venue ---
-    "bank_length",
+    "bank_length", "bank_angle",
     "venue_top3_rate", "venue_n_races", "venue_specialist_score",
     "top3_333", "top3_400", "top3_500",
     # --- Line structure ---
     "line_pos", "line_len", "is_leader", "is_follower", "is_solo",
     "rating_vs_leader_gap", "has_line",
+    # --- Style matchup (レース内の脚質構成) ---
+    *STYLE_CONTEXT_COLUMNS,
+    # --- Simulation (ライン力学・展開シミュレーション) ---
+    "p_sim_win", "p_sim_top3", "p_front", "sim_used",
     # --- Gear ---
     "gear_ratio", "gear_z", "gear_rank", "gear_above_field",
     # --- Race context ---
@@ -82,8 +87,10 @@ def build_race_features(
                 SELECT e.race_id, e.car_no, e.player_id,
                        e.rank_class, e.rating, e.gear_ratio, e.style,
                        e.line_id, e.line_pos, e.scratched,
+                       e.nige_cnt, e.makuri_cnt, e.sashi_cnt, e.mark_cnt,
+                       e.s_count, e.b_count,
                        r.grade, r.distance_m, r.weather,
-                       v.bank_length
+                       v.bank_length, v.bank_angle
                 FROM entries e
                 JOIN races r ON e.race_id = r.race_id
                 LEFT JOIN venues v ON r.venue_id = v.venue_id
@@ -122,7 +129,7 @@ def build_race_features(
         ].rename(columns={"avg_finish": "avg_finish_5", "top3_rate": "top3_rate_5"})
         pf10 = player_form.rolling_finish_stats(engine, ref_date, n_races=10)[
             ["top3_rate", "win_rate"]
-        ].rename(columns={"top3_rate": "top3_rate_10"})
+        ].rename(columns={"top3_rate": "top3_rate_10", "win_rate": "win_rate_10"})
         pf20 = player_form.rolling_finish_stats(engine, ref_date, n_races=20)[
             ["top3_rate"]
         ].rename(columns={"top3_rate": "top3_rate_20"})
@@ -195,6 +202,20 @@ def build_race_features(
         entries["has_line"] = 0
     else:
         entries["has_line"] = entries["has_line"].fillna(0).astype(int)
+
+    # --- 6b. Style matchup (レース内の脚質構成) ---------------------------------
+    try:
+        sc = race_style_context(entries)
+        entries = entries.set_index("car_no").join(sc, how="left")
+        entries = entries.reset_index().rename(columns={"index": "car_no"})
+    except Exception as e:
+        log.warning("style matchup features failed: %s", e)
+        for col in STYLE_CONTEXT_COLUMNS:
+            if col not in entries.columns:
+                entries[col] = float("nan")
+
+    # --- 6c. Simulation features (ライン力学・展開シミュレーション) -------------
+    entries = _join_sim_features(engine, race_id, entries)
 
     # --- 8b. Field-relative rating (computed from entries, no SQL needed) ------
     # Use ONLY observed ratings for the field statistics. A car with a missing
@@ -276,6 +297,54 @@ def build_training_frame(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_SIM_COLS = ["p_sim_win", "p_sim_top3", "p_front"]
+
+
+def _join_sim_features(engine: Engine, race_id: str, entries: pd.DataFrame) -> pd.DataFrame:
+    """sim_features キャッシュを結合。無ければライン付きレースに限りその場で計算。
+
+    ライン情報がない (シミュレーション不可) レースは NaN + sim_used=0 のままにし、
+    LightGBM のネイティブ NaN 処理でフォールバックさせる。
+    """
+    sim_df = pd.DataFrame()
+    try:
+        with engine.begin() as conn:
+            sim_df = pd.read_sql(
+                text(
+                    "SELECT car_no, p_sim_win, p_sim_top3, p_front"
+                    " FROM sim_features WHERE race_id = :rid"
+                ),
+                conn,
+                params={"rid": race_id},
+            )
+    except Exception as e:
+        log.warning("sim_features cache read failed: %s", e)
+
+    if sim_df.empty and entries["line_id"].notna().sum() >= 2:
+        try:
+            from keirin.simulation import simulate_race
+            active = entries[entries["scratched"].fillna(0) == 0]
+            sim = simulate_race(active)
+            if sim is not None:
+                sim_df = pd.DataFrame({
+                    "car_no": list(sim.p_win.keys()),
+                    "p_sim_win": list(sim.p_win.values()),
+                    "p_sim_top3": [sim.p_top3.get(c) for c in sim.p_win],
+                    "p_front": [sim.p_front.get(c) for c in sim.p_win],
+                })
+        except Exception as e:
+            log.warning("on-the-fly simulation failed for %s: %s", race_id, e)
+
+    if not sim_df.empty:
+        entries = entries.merge(sim_df, on="car_no", how="left")
+        entries["sim_used"] = entries["p_sim_win"].notna().astype(int)
+    else:
+        for col in _SIM_COLS:
+            entries[col] = float("nan")
+        entries["sim_used"] = 0
+    return entries
+
 
 def _venue_id_for_race(engine: Engine, race_id: str) -> str | None:
     with engine.begin() as conn:
@@ -388,4 +457,13 @@ def _add_target(engine: Engine, entries: pd.DataFrame) -> pd.DataFrame:
     has_any_result = not results.empty
     if has_any_result:
         merged[TARGET] = merged[TARGET].fillna(0).astype(int)
+        # 着外導出: the race has results, so a non-scratched car with no result
+        # row finished 4th or worse. Fill the sentinel so the ranker sees these
+        # rows as negatives instead of dropping them (finish=9 → relevance 0).
+        # Scratched cars keep NaN finish and stay out of ranker training.
+        if "scratched" in merged.columns:
+            outside = merged["finish"].isna() & (merged["scratched"].fillna(0) == 0)
+        else:
+            outside = merged["finish"].isna()
+        merged.loc[outside, "finish"] = 9
     return merged

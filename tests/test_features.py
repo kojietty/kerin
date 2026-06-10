@@ -24,6 +24,7 @@ def mem_engine():
         conn.execute(text("INSERT INTO venues VALUES ('81', '小倉', 400, NULL)"))
         conn.execute(text("INSERT INTO players VALUES ('P1','田中',NULL,NULL,'逃','S1',90.0,NULL)"))
         conn.execute(text("INSERT INTO players VALUES ('P2','鈴木',NULL,NULL,'差','A1',75.0,NULL)"))
+        conn.execute(text("INSERT INTO players VALUES ('P3','佐藤',NULL,NULL,'追','A1',70.0,NULL)"))
         conn.execute(text(
             "INSERT INTO races VALUES ('R001','2026-04-01','81',11,'F1',NULL,400,NULL,NULL,'18:00')"
         ))
@@ -33,18 +34,28 @@ def mem_engine():
         # Entries
         for car, pid, lid, lpos in [(1,'P1',1,1),(2,'P2',1,2)]:
             conn.execute(text(
-                "INSERT INTO entries VALUES ('R001',:cn,:pid,'S1',90.0,3.5,:lid,:lp,'逃',0)"
+                "INSERT INTO entries (race_id,car_no,player_id,rank_class,rating,"
+                "gear_ratio,line_id,line_pos,style,scratched)"
+                " VALUES ('R001',:cn,:pid,'S1',90.0,3.5,:lid,:lp,'逃',0)"
             ), {"cn": car, "pid": pid, "lid": lid, "lp": lpos})
         for car, pid, lid, lpos in [(1,'P1',1,1),(2,'P2',1,2)]:
             conn.execute(text(
-                "INSERT INTO entries VALUES ('R002',:cn,:pid,'S1',90.0,3.5,:lid,:lp,'逃',0)"
+                "INSERT INTO entries (race_id,car_no,player_id,rank_class,rating,"
+                "gear_ratio,line_id,line_pos,style,scratched)"
+                " VALUES ('R002',:cn,:pid,'S1',90.0,3.5,:lid,:lp,'逃',0)"
             ), {"cn": car, "pid": pid, "lid": lid, "lp": lpos})
+        # P3 raced R001 but has no result row → 着外 (finish=9) derivation target
+        conn.execute(text(
+            "INSERT INTO entries (race_id,car_no,player_id,rank_class,rating,"
+            "gear_ratio,line_id,line_pos,style,scratched)"
+            " VALUES ('R001',3,'P3','A1',70.0,3.4,NULL,NULL,'追',0)"
+        ))
         # Results
         conn.execute(text("INSERT INTO results VALUES ('R001',1,1,'逃',NULL)"))
         conn.execute(text("INSERT INTO results VALUES ('R001',2,2,'マーク',NULL)"))
         conn.execute(text("INSERT INTO results VALUES ('R002',1,3,'逃',NULL)"))
         conn.execute(text("INSERT INTO results VALUES ('R002',2,1,'差',NULL)"))
-        sync_player_race_log(engine)
+    sync_player_race_log(engine)
     return engine
 
 
@@ -186,3 +197,86 @@ def test_has_line_indicator(mem_engine):
     assert "has_line" in df.columns
     # R001 fixture has line_id populated for both cars
     assert int(df["has_line"].iloc[0]) == 1
+
+
+def test_outside_finish_sentinel(mem_engine):
+    """sync_player_race_log derives finish=9 (着外) for non-scratched entries in
+    races that have results but no result row for that car."""
+    from sqlalchemy import text as _text
+    with mem_engine.begin() as conn:
+        row = conn.execute(_text(
+            "SELECT finish FROM player_race_log"
+            " WHERE player_id='P3' AND race_id='R001'"
+        )).fetchone()
+    assert row is not None
+    assert row[0] == 9
+    # 着外行はフォーム統計に負例として入る (top3_rate < 1.0)
+    df = player_form.rolling_finish_stats(mem_engine, "2026-04-11", n_races=5)
+    assert "P3" in df.index
+    assert df.loc["P3", "top3_rate"] == 0.0
+
+
+def test_add_target_outside_fill(mem_engine):
+    """_add_target fills finish=9 for raced-but-unplaced cars so the ranker
+    sees them as negatives (relevance 0) instead of dropping the rows."""
+    import pandas as pd
+    from keirin.features.builder import _add_target
+
+    entries = pd.DataFrame({
+        "race_id": ["R001"] * 3, "car_no": [1, 2, 3], "scratched": [0, 0, 0],
+    })
+    out = _add_target(mem_engine, entries)
+    assert out.loc[out["car_no"] == 3, "finish"].iloc[0] == 9
+    assert out.loc[out["car_no"] == 3, "label_top3"].iloc[0] == 0
+    assert out.loc[out["car_no"] == 1, "finish"].iloc[0] == 1
+
+
+def test_style_matchup_context():
+    """race_style_context: 脚質構成・B回数相対化の基本性質。"""
+    import numpy as np
+    import pandas as pd
+    from keirin.features.style_matchup import race_style_context
+
+    entries = pd.DataFrame({
+        "car_no": [1, 2, 3, 4, 5],
+        "style": ["逃", "追", "追", "両", "逃"],
+        "b_count": [8, 0, 1, 3, 4],
+        "nige_cnt": [5, 0, 0, 1, 3],
+        "makuri_cnt": [1, 0, 1, 2, 1],
+        "sashi_cnt": [0, 4, 3, 1, 0],
+        "mark_cnt": [0, 2, 2, 0, 0],
+        "bank_length": [333] * 5,
+    })
+    out = race_style_context(entries)
+    assert out.loc[1, "style_nige"] == 1
+    assert out.loc[2, "style_oi"] == 1
+    assert out.loc[1, "n_nige_in_race"] == 2          # 車1と車5が逃
+    assert out.loc[1, "is_lone_nige"] == 0            # 逃が2人 → 単独ではない
+    assert out.loc[1, "b_count_rank"] == 1            # B回数最多
+    assert abs(out["b_count_share"].sum() - 1.0) < 1e-9
+    assert out.loc[1, "style_x_short_bank"] == 1      # 逃 × 333バンク
+    assert out.loc[2, "style_x_short_bank"] == 0
+    # 決まり手構成比: 車2 は 差+マ のみ → sashi_mark_rate=1.0
+    assert abs(out.loc[2, "sashi_mark_rate"] - 1.0) < 1e-9
+    # 文字化け style も正規化されて one-hot に乗る
+    entries2 = entries.assign(style=["騾�", "霑ｽ", "霑ｽ", "荳｡", "騾�"])
+    out2 = race_style_context(entries2)
+    assert (out2[["style_nige", "style_ryo", "style_oi"]].values
+            == out[["style_nige", "style_ryo", "style_oi"]].values).all()
+
+
+def test_lone_nige_flag():
+    import pandas as pd
+    from keirin.features.style_matchup import race_style_context
+
+    entries = pd.DataFrame({
+        "car_no": [1, 2, 3, 4],
+        "style": ["逃", "追", "追", "両"],
+        "b_count": [None] * 4,
+        "nige_cnt": [None] * 4, "makuri_cnt": [None] * 4,
+        "sashi_cnt": [None] * 4, "mark_cnt": [None] * 4,
+        "bank_length": [400] * 4,
+    })
+    out = race_style_context(entries)
+    assert out.loc[1, "is_lone_nige"] == 1
+    assert out.loc[2, "is_lone_nige"] == 0

@@ -25,12 +25,34 @@ def get_engine(db_path: str | Path) -> Engine:
     return engine
 
 
+# Columns added after the initial schema. CREATE TABLE IF NOT EXISTS doesn't
+# alter existing tables, so pre-existing DBs are migrated with ALTER TABLE.
+_MIGRATIONS: dict[str, dict[str, str]] = {
+    "entries": {
+        "nige_cnt": "INTEGER",
+        "makuri_cnt": "INTEGER",
+        "sashi_cnt": "INTEGER",
+        "mark_cnt": "INTEGER",
+        "s_count": "INTEGER",
+        "b_count": "INTEGER",
+        "line_raw": "TEXT",
+    },
+}
+
+
 def init_db(engine: Engine) -> None:
     schema = _SCHEMA_PATH.read_text(encoding="utf-8")
     with engine.begin() as conn:
         for stmt in _split_sql(schema):
             if stmt.strip():
                 conn.exec_driver_sql(stmt)
+        for table, columns in _MIGRATIONS.items():
+            existing = {
+                row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")
+            }
+            for col, coltype in columns.items():
+                if col not in existing:
+                    conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
 
 
 def _split_sql(sql: str) -> list[str]:

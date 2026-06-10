@@ -65,6 +65,14 @@ CREATE TABLE IF NOT EXISTS entries (
     line_pos    INTEGER,
     style       TEXT,
     scratched   INTEGER DEFAULT 0,
+    -- 出走表の直近4ヶ月集計値 (netkeirin 掲載時点の値 = 予測時点で入手可能)
+    nige_cnt    INTEGER,        -- 逃げ回数
+    makuri_cnt  INTEGER,        -- 捲り回数
+    sashi_cnt   INTEGER,        -- 差し回数
+    mark_cnt    INTEGER,        -- マーク回数
+    s_count     INTEGER,        -- S回数 (スタート取り)
+    b_count     INTEGER,        -- B回数 (バック先頭 = 先行力の直接指標)
+    line_raw    TEXT,           -- ライン欄の生文字列 (パーサ診断用)
     PRIMARY KEY (race_id, car_no),
     FOREIGN KEY (race_id) REFERENCES races(race_id),
     FOREIGN KEY (player_id) REFERENCES players(player_id)
@@ -174,6 +182,22 @@ CREATE INDEX IF NOT EXISTS idx_odds_snapshot      ON odds_trifecta(race_id, snap
 CREATE INDEX IF NOT EXISTS idx_bets_race          ON bets(race_id);
 CREATE INDEX IF NOT EXISTS idx_bets_placed_at     ON bets(placed_at);
 CREATE INDEX IF NOT EXISTS idx_fetch_log_url      ON fetch_log(url, fetched_at);
+
+-- ---------------------------------------------------------------------------
+-- Simulation feature cache (ライン力学・展開モンテカルロの出力)
+-- precompute_sim_features.py が一括計算して書き込み、builder が学習時に参照する。
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS sim_features (
+    race_id     TEXT NOT NULL,
+    car_no      INTEGER NOT NULL,
+    p_sim_win   REAL,            -- シミュレーション P(1着)
+    p_sim_top3  REAL,            -- シミュレーション P(3着内)
+    p_front     REAL,            -- 自ラインが主導権(先行)を取る確率
+    sim_version TEXT,
+    PRIMARY KEY (race_id, car_no),
+    FOREIGN KEY (race_id) REFERENCES races(race_id)
+);
 
 -- ---------------------------------------------------------------------------
 -- Prediction log (for feedback loop and accuracy tracking)
