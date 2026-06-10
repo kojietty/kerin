@@ -1,0 +1,70 @@
+name: 📊 アーム比較バックテスト
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_date:
+        description: "開始日 YYYY-MM-DD (省略可)"
+        required: false
+        default: ""
+      to_date:
+        description: "終了日 YYYY-MM-DD (省略可)"
+        required: false
+        default: ""
+      subset:
+        description: "all / line_only"
+        required: false
+        default: "all"
+      arms:
+        description: "比較アーム (カンマ区切り)"
+        required: false
+        default: "baseline,new_feats,sim_only,fused,blend"
+
+permissions:
+  contents: write      # 結果 JSON を commit
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-ci.txt
+
+      - name: Precompute simulation features
+        run: python scripts/precompute_sim_features.py
+
+      - name: Run arm comparison
+        run: |
+          ARGS="--subset ${{ github.event.inputs.subset }} --arms ${{ github.event.inputs.arms }}"
+          if [ -n "${{ github.event.inputs.from_date }}" ]; then ARGS="$ARGS --from ${{ github.event.inputs.from_date }}"; fi
+          if [ -n "${{ github.event.inputs.to_date }}" ]; then ARGS="$ARGS --to ${{ github.event.inputs.to_date }}"; fi
+          python scripts/backtest_compare.py $ARGS
+
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-results
+          path: reports/backtest_*.json
+
+      - name: Commit results
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/
+          git diff --cached --quiet || git commit -m "chore: バックテスト結果 $(date +%Y-%m-%d)"
+          git push

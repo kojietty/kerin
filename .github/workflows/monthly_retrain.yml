@@ -29,6 +29,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-ci.txt
 
+      - name: Precompute simulation features
+        run: python scripts/precompute_sim_features.py
+
       - name: Retrain model
         run: |
           cd $GITHUB_WORKSPACE
@@ -38,6 +41,6 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add models/
+          git add models/ data/keirin.db
           git diff --cached --quiet || git commit -m "feat: モデル再学習 $(date +%Y-%m)"
           git push

@@ -6,7 +6,7 @@ GitHub Actions 朝ジョブ (9:00 JST):
   4. HTML を docs/ に出力 → GitHub Pages で公開
 """
 from __future__ import annotations
-import sys, io, os, re, time, json, requests
+import sys, io, os, time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 sys.path.insert(0, "src")
@@ -18,6 +18,8 @@ from sqlalchemy import text
 from keirin.config import load_app_config
 from keirin.db.engine import get_engine, init_db
 from keirin.db.repository import upsert_race, upsert_entries, insert_odds_snapshot, log_prediction
+from keirin.features.style_norm import normalize_style
+from keirin.scraper.session import fetch_text
 from keirin.scraper.netkeirin import (
     entry_url, odds_url, parse_entries, parse_line_assignments, parse_trifecta_odds
 )
@@ -50,16 +52,7 @@ SLEEP = float(os.environ.get("REQUEST_SLEEP", "1.2"))
 
 
 def _get(url: str) -> str:
-    try:
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        enc = r.apparent_encoding or "utf-8"
-        if enc.lower() in ("windows-1252", "iso-8859-1", "latin-1"):
-            enc = "cp932"
-        r.encoding = enc
-        return r.text
-    except Exception as e:
-        print(f"  GET failed {url[:50]}: {e}")
-        return ""
+    return fetch_text(url, headers=HEADERS, timeout=20)
 
 
 def _to_int(v):
@@ -67,6 +60,13 @@ def _to_int(v):
         return int(str(v).split(".")[0])
     except Exception:
         return 0
+
+
+def _int_or_none(v):
+    try:
+        return int(str(v).split(".")[0])
+    except Exception:
+        return None
 
 
 def _flt(v):
@@ -77,13 +77,7 @@ def _flt(v):
 
 
 def _style(code):
-    if not code:
-        return None
-    s = str(code).strip()
-    for k, v in {"逃": "逃", "捲": "捲", "差": "差", "マ": "マーク", "追": "マーク"}.items():
-        if k in s:
-            return v
-    return s[:4]
+    return normalize_style(code)
 
 
 # ── 1. 会場スキャン ──────────────────────────────────────────────────────────
@@ -142,10 +136,23 @@ for vc in active_venues:
              "player_id": e.get("player_id"), "rank_class": e.get("grade"),
              "rating": _flt(e.get("race_score")), "gear_ratio": _flt(e.get("gear")),
              "line_id": e.get("line_id"), "line_pos": e.get("line_pos"),
-             "style": _style(e.get("style_code")), "scratched": 0}
+             "style": _style(e.get("style_code")), "scratched": 0,
+             "nige_cnt": _int_or_none(e.get("nige")),
+             "makuri_cnt": _int_or_none(e.get("makuri")),
+             "sashi_cnt": _int_or_none(e.get("sashi")),
+             "mark_cnt": _int_or_none(e.get("mark")),
+             "s_count": _int_or_none(e.get("sprints")),
+             "b_count": _int_or_none(e.get("backs")),
+             "line_raw": e.get("line_raw") or None}
             for e in enriched
         ])
         all_race_ids.append(rid)
+
+        # ライン割当の診断ログ: 1レースで割当できた車数 (0=並びなし/パーサ不調)
+        n_lined = sum(1 for e in enriched if e.get("line_id") is not None)
+        if n_lined == 0:
+            sample_raw = next((e.get("line_raw") for e in enriched if e.get("line_raw")), "")
+            print(f"    [line] {rid}: 割当0台 line_raw={sample_raw[:40]!r}")
 
 print(f"出走表: {len(all_race_ids)} レース")
 

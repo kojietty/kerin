@@ -133,6 +133,7 @@ def parse_entries(html: str) -> list[dict[str, Any]]:
                 "race_score": _float(cells, 5),
                 "style_code": style_code,
                 "sprints": _int(cells, 7),
+                "backs": _int(cells, 8),
                 "nige": _int(cells, 9),
                 "makuri": _int(cells, 10),
                 "sashi": _int(cells, 11),
@@ -151,31 +152,59 @@ def parse_entries(html: str) -> list[dict[str, Any]]:
     return entries
 
 
+# 丸数字 → 通常数字
+_CIRCLED_DIGITS = str.maketrans("①②③④⑤⑥⑦⑧⑨", "123456789")
+# 全角数字 → 半角
+_FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
+
+
+def _normalize_line_text(s: str) -> str:
+    return s.translate(_CIRCLED_DIGITS).translate(_FULLWIDTH_DIGITS)
+
+
 def parse_line_assignments(entries: list[dict]) -> list[dict]:
     """Assign line_id and line_pos from line_raw fields.
 
     ライン cell format: "3-1-5 / 2-7 / 4-6" (line groups separated by /)
-    Each group lists car numbers from front to back.
-    """
-    # Collect all line strings; find the most common non-trivial one.
-    # In practice, all riders' line_raw cells should contain the same string.
-    line_raw = ""
-    for e in entries:
-        if e.get("line_raw") and len(e.get("line_raw", "")) > 1:
-            line_raw = e["line_raw"]
-            break
+    Each group lists car numbers from front to back. 全角数字・丸数字・
+    改行/空白区切りにも対応する。
 
-    if not line_raw:
-        return entries
+    健全性ガード: 割当できた車番数が max(2, 出走数の半分) 未満なら、
+    部分的な誤割当を防ぐため全車 line 無しで返す。過去に line_raw が
+    壊れた値だった際、1台だけに line_id=1/line_pos=1 が付く偽データが
+    全レースに混入した事故の再発防止。
+    """
+    # Pick the most informative (longest) line string among entries.
+    candidates = [e.get("line_raw") or "" for e in entries]
+    line_raw = max(candidates, key=len, default="")
 
     result = {e["car_no"]: e.copy() for e in entries}
-    groups = re.split(r"[/／]", line_raw)
-    for line_id, group in enumerate(groups, start=1):
-        cars = [int(x) for x in re.findall(r"\d", group)]
-        for pos, cn in enumerate(cars, start=1):
-            if cn in result:
-                result[cn]["line_id"] = line_id
-                result[cn]["line_pos"] = pos
+    valid_cars = set(result.keys())
+
+    assigned: dict[int, tuple[int, int]] = {}
+    if line_raw:
+        normalized = _normalize_line_text(line_raw)
+        groups = [g for g in re.split(r"[/／\n\r\s]+", normalized) if g]
+        line_id = 0
+        for group in groups:
+            cars = []
+            for ch in re.findall(r"[1-9]", group):
+                cn = int(ch)
+                if cn in valid_cars and cn not in assigned and cn not in cars:
+                    cars.append(cn)
+            if not cars:
+                continue
+            line_id += 1
+            for pos, cn in enumerate(cars, start=1):
+                assigned[cn] = (line_id, pos)
+
+    # Sanity guard: a believable 並び covers most of the field.
+    if len(assigned) < max(2, len(entries) // 2):
+        return list(result.values())
+
+    for cn, (lid, lpos) in assigned.items():
+        result[cn]["line_id"] = lid
+        result[cn]["line_pos"] = lpos
 
     return list(result.values())
 
@@ -264,6 +293,118 @@ def parse_result(html: str) -> dict[str, Any]:
                 })
 
     return {"results": results, "payouts": payouts}
+
+
+# 決まり手の表記ゆれ → 正準値 (player_form.kimarite_dist と整合)
+_KIMARITE_CANON: list[tuple[str, str]] = [
+    ("逃", "逃"), ("捲", "捲"), ("まくり", "捲"),
+    ("差", "差"), ("マーク", "マーク"), ("マ", "マーク"),
+]
+
+
+def _normalize_kimarite(s: str) -> str | None:
+    s = (s or "").strip()
+    if not s:
+        return None
+    for prefix, canon in _KIMARITE_CANON:
+        if s.startswith(prefix):
+            return canon
+    return None
+
+
+def parse_full_result(html: str) -> dict[str, Any] | None:
+    """Parse race result page: full finishing order + kimarite + trifecta payout.
+
+    Returns {"results": [{car_no, finish, kimarite, time_sec}], "trifecta": str|None,
+             "payout": int|None} or None if nothing parseable.
+
+    Strategy:
+      1. テキスト走査で 1-3着 + 三連単払戻 (実運用で実績のある方式)
+      2. テーブル走査で全着順 (1-9着) + 決まり手 (ベストエフォート)
+      3. テーブル結果が妥当 (5行以上・着順/車番が重複なし) なら全着順を採用、
+         そうでなければテキスト由来の top3 のみ
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    # --- 1. text-based top3 + trifecta (proven in production) ---------------
+    body = soup.get_text("\n")
+    lines = [l.strip() for l in body.split("\n") if l.strip()]
+    trifecta = payout = None
+    for i, line_txt in enumerate(lines):
+        if "３連単" in line_txt or "3連単" in line_txt:
+            chunk = " ".join(lines[i:i + 8])
+            m_combo = re.search(r"([1-9])[>＞－\-]([1-9])[>＞－\-]([1-9])", chunk)
+            m_pay = re.search(r"([\d,]+)円", chunk)
+            if m_combo:
+                trifecta = f"{m_combo.group(1)}-{m_combo.group(2)}-{m_combo.group(3)}"
+            if m_pay:
+                payout = int(m_pay.group(1).replace(",", ""))
+            if trifecta:
+                break
+
+    text_results: list[dict] = []
+    for i, line_txt in enumerate(lines):
+        m = re.match(r"^([1-9])着$", line_txt)
+        if m:
+            for j in range(i + 1, min(i + 6, len(lines))):
+                if re.match(r"^[1-9]$", lines[j]):
+                    text_results.append({
+                        "finish": int(m.group(1)), "car_no": int(lines[j]),
+                        "kimarite": None, "time_sec": None,
+                    })
+                    break
+    if not text_results and trifecta:
+        cars = [int(c) for c in trifecta.split("-")]
+        text_results = [{"finish": k + 1, "car_no": c, "kimarite": None, "time_sec": None}
+                        for k, c in enumerate(cars)]
+
+    # --- 2. table-based full order + kimarite (best effort) -----------------
+    table_results: list[dict] = []
+    for table in soup.select("table"):
+        if "着" not in table.get_text():
+            continue
+        rows: list[dict] = []
+        for tr in table.select("tr"):
+            cells = tr.select("td")
+            if len(cells) < 2:
+                continue
+            f = _to_int(cells[0].get_text(strip=True))
+            c = _to_int(cells[1].get_text(strip=True))
+            if f is None or c is None or not (1 <= f <= 9) or not (1 <= c <= 9):
+                continue
+            kim = None
+            time_sec = None
+            for cell in cells[2:]:
+                t = cell.get_text(strip=True)
+                if kim is None:
+                    kim = _normalize_kimarite(t)
+                if time_sec is None:
+                    m_t = re.fullmatch(r"(\d{1,2}\.\d)", t)
+                    if m_t:
+                        time_sec = float(m_t.group(1))
+            rows.append({"finish": f, "car_no": c, "kimarite": kim, "time_sec": time_sec})
+        finishes = [r["finish"] for r in rows]
+        cars_seen = [r["car_no"] for r in rows]
+        if (len(rows) >= 5 and len(set(finishes)) == len(finishes)
+                and len(set(cars_seen)) == len(cars_seen) and 1 in finishes):
+            if len(rows) > len(table_results):
+                table_results = rows
+
+    # --- 3. merge ------------------------------------------------------------
+    if table_results:
+        # 健全性: テキスト由来の1着とテーブルの1着が両方あれば一致を要求
+        text_first = next((r["car_no"] for r in text_results if r["finish"] == 1), None)
+        table_first = next((r["car_no"] for r in table_results if r["finish"] == 1), None)
+        if text_first is None or text_first == table_first:
+            results = table_results
+        else:
+            results = text_results
+    else:
+        results = text_results
+
+    if not results and not trifecta:
+        return None
+    return {"results": results, "trifecta": trifecta, "payout": payout}
 
 
 def parse_player_recent(html: str) -> list[dict]:

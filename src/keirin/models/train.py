@@ -35,11 +35,19 @@ TRAIN_FEATURES = [
     # Kimarite (many will be NaN if not scraped — LightGBM handles it)
     "km_nige", "km_maki", "km_sashi", "km_mark",
     # Venue
-    "bank_length", "venue_top3_rate", "venue_specialist_score",
+    "bank_length", "bank_angle", "venue_top3_rate", "venue_specialist_score",
     "top3_333", "top3_400", "top3_500",
     # Line (mostly NaN in imported data, but useful once scraped)
     "line_pos", "line_len", "is_leader", "is_follower", "is_solo",
     "rating_vs_leader_gap", "has_line",
+    # Style matchup (レース内の脚質構成)
+    "style_nige", "style_ryo", "style_oi",
+    "n_nige_in_race", "nige_ratio", "is_lone_nige",
+    "b_count_rank", "b_count_share",
+    "nige_makuri_rate", "sashi_mark_rate",
+    "style_x_short_bank", "style_x_long_bank",
+    # Simulation (ライン力学・展開シミュレーション — fallback は NaN)
+    "p_sim_win", "p_sim_top3", "p_front", "sim_used",
     # Gear
     "gear_ratio", "gear_z", "gear_rank", "gear_above_field",
     # Race context
@@ -70,6 +78,7 @@ def train_model(
     df: pd.DataFrame,
     *,
     val_df: pd.DataFrame | None = None,
+    features: list[str] | None = None,
     n_estimators: int = 300,
     learning_rate: float = 0.05,
     num_leaves: int = 31,
@@ -79,15 +88,18 @@ def train_model(
     bagging_freq: int = 5,
     class_weight: str = "balanced",
 ) -> Any:
-    """Train LightGBM binary model. Returns fitted model."""
+    """Train LightGBM binary model. Returns fitted model.
+
+    features: 特徴量リストのオーバーライド (バックテストのアーム比較用)。
+              None なら TRAIN_FEATURES を使用。
+    """
     try:
         import lightgbm as lgb
     except ImportError:
         raise RuntimeError("lightgbm not installed — run: pip install lightgbm")
 
-    from keirin.models.train import TRAIN_FEATURES
-
-    feature_cols = [c for c in TRAIN_FEATURES if c in df.columns]
+    base_features = features if features is not None else TRAIN_FEATURES
+    feature_cols = [c for c in base_features if c in df.columns]
     X_train = df[feature_cols].values.astype(np.float32)
     y_train = df["label_top3"].values.astype(np.int32)
 
@@ -111,8 +123,7 @@ def train_model(
     model = lgb.LGBMClassifier(**params)
 
     if val_df is not None and not val_df.empty:
-        val_feature_cols = [c for c in TRAIN_FEATURES if c in val_df.columns]
-        X_val = val_df[val_feature_cols].reindex(columns=feature_cols, fill_value=np.nan).values.astype(np.float32)
+        X_val = val_df.reindex(columns=feature_cols, fill_value=np.nan)[feature_cols].values.astype(np.float32)
         y_val = val_df["label_top3"].values.astype(np.int32)
         model.fit(
             X_train, y_train,
@@ -302,6 +313,7 @@ def train_ranker(
     df: pd.DataFrame,
     *,
     val_df: pd.DataFrame | None = None,
+    features: list[str] | None = None,
     n_estimators: int = 500,
     learning_rate: float = 0.05,
     num_leaves: int = 31,
@@ -317,7 +329,8 @@ def train_ranker(
     except ImportError:
         raise RuntimeError("lightgbm not installed — run: pip install lightgbm")
 
-    feature_cols = [c for c in TRAIN_FEATURES if c in df.columns]
+    base_features = features if features is not None else TRAIN_FEATURES
+    feature_cols = [c for c in base_features if c in df.columns]
 
     # Ranker needs race grouping: drop rows without finish, sort by race_id
     df_clean = df.dropna(subset=["finish"]).copy()

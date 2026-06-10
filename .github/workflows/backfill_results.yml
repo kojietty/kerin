@@ -1,0 +1,61 @@
+name: 🔁 全着順・決まり手バックフィル
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_date:
+        description: "開始日 YYYY-MM-DD (省略可)"
+        required: false
+        default: ""
+      to_date:
+        description: "終了日 YYYY-MM-DD (省略可)"
+        required: false
+        default: ""
+      limit:
+        description: "最大レース数"
+        required: false
+        default: "2000"
+
+permissions:
+  contents: write      # 更新した DB を commit & push
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-ci.txt
+
+      - name: Backfill full results + kimarite
+        env:
+          NETKEIRIN_COOKIE: ${{ secrets.NETKEIRIN_COOKIE }}
+          REQUEST_SLEEP: "1.5"
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.from_date }}" ]; then ARGS="$ARGS --from ${{ github.event.inputs.from_date }}"; fi
+          if [ -n "${{ github.event.inputs.to_date }}" ]; then ARGS="$ARGS --to ${{ github.event.inputs.to_date }}"; fi
+          ARGS="$ARGS --limit ${{ github.event.inputs.limit }}"
+          python scripts/backfill_results.py $ARGS
+
+      - name: Commit updated DB
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/keirin.db
+          git diff --cached --quiet || git commit -m "chore: 全着順・決まり手バックフィル $(date +%Y-%m-%d)"
+          git push
