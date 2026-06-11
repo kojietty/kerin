@@ -1,0 +1,47 @@
+name: 🔍 出走表テーブル診断ダンプ
+
+on:
+  workflow_dispatch:
+    inputs:
+      race_ids:
+        description: "対象レースID (スペース区切り、省略時は既定値)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements-ci.txt
+
+      - name: Dump entry table HTML
+        env:
+          NETKEIRIN_COOKIE: ${{ secrets.NETKEIRIN_COOKIE }}
+        run: |
+          IDS="${{ github.event.inputs.race_ids }}"
+          if [ -z "$IDS" ]; then IDS="202606111201 202605087508"; fi
+          python scripts/dump_entry_table.py $IDS
+
+      - name: Commit dump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/entry_table_dump.txt
+          git diff --cached --quiet || git commit -m "chore: 出走表テーブル診断ダンプ"
+          git push
